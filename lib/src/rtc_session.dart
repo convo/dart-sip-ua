@@ -1412,8 +1412,7 @@ class RTCSession extends EventManager implements Owner {
   void newInfo(String originator, Info info, dynamic request) {
     logger.d('newInfo()');
 
-    emit(EventNewInfo(originator: originator, info: info, request: request));
-    emit(EventInfo(session: this, originator: originator, info: info));
+    emit(EventNewInfo(session: this, originator: originator, request: request, info: info));
   }
 
   /**

@@ -299,7 +299,7 @@ class SIPUAHelper extends EventManager {
         logger.d('session initialized.');
       }, buildCallOptions(true));
     });
-    handlers.on(EventInfo(), (EventInfo event) async {
+    handlers.on(EventNewInfo(), (EventNewInfo event) async {
       logger.d('Info received, body: ${event.info!.body}');
       _notifyCallStateListeners(
           event, CallState(CallStateEnum.INFO, info: event.info));

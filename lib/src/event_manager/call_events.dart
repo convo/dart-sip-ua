@@ -113,8 +113,12 @@ class EventCallRefer extends CallEvent {
   dynamic reject;
 }
 
-class EventInfo extends CallEvent {
-  EventInfo({RTCSession? session, this.originator, this.info}) : super(session);
+
+
+class EventNewInfo extends CallEvent {
+  EventNewInfo({RTCSession? session, this.originator, this.request, this.info})
+      : super(session);
   String? originator;
+  dynamic request;
   Info? info;
 }

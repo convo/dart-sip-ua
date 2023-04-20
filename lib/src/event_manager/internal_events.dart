@@ -71,13 +71,6 @@ class EventNewDTMF extends EventType {
   DTMF? dtmf;
 }
 
-class EventNewInfo extends EventType {
-  EventNewInfo({this.originator, this.request, this.info});
-  String? originator;
-  dynamic request;
-  Info? info;
-}
-
 class EventPeerConnection extends EventType {
   EventPeerConnection(this.peerConnection);
   RTCPeerConnection? peerConnection;
