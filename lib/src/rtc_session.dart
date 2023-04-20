@@ -1413,6 +1413,7 @@ class RTCSession extends EventManager implements Owner {
     logger.d('newInfo()');
 
     emit(EventNewInfo(originator: originator, info: info, request: request));
+    emit(EventInfo(session: this, originator: originator, info: info));
   }
 
   /**

@@ -1,6 +1,7 @@
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../rtc_session.dart';
+import '../rtc_session/info.dart';
 import '../sip_message.dart';
 import 'events.dart';
 
@@ -110,4 +111,10 @@ class EventCallRefer extends CallEvent {
 
   //bool Function([dynamic options]) reject;
   dynamic reject;
+}
+
+class EventInfo extends CallEvent {
+  EventInfo({RTCSession? session, this.originator, this.info}) : super(session);
+  String? originator;
+  Info? info;
 }
