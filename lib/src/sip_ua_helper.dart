@@ -139,6 +139,7 @@ class SIPUAHelper extends EventManager {
     _settings.dtmf_mode = uaSettings.dtmfMode;
     _settings.session_timers = uaSettings.sessionTimers;
     _settings.ice_gathering_timeout = uaSettings.iceGatheringTimeout;
+    _settings.register_extra_headers = uaSettings.registrarExtrHeaders;
 
     try {
       _ua = UA(_settings);
@@ -705,6 +706,8 @@ class UaSettings {
   String? password;
   String? ha1;
   String? displayName;
+
+  List<String>? registrarExtrHeaders;
 
   /// DTMF mode, in band (rfc2833) or out of band (sip info)
   DtmfMode dtmfMode = DtmfMode.INFO;

@@ -17,6 +17,8 @@ class Settings {
   String? realm;
   String? ha1;
 
+  List<String>? register_extra_headers;
+
   // SIP account.
   String? display_name;
   dynamic uri;
@@ -245,7 +247,12 @@ class Checks {
     },
     'ice_gathering_timeout': (Settings src, Settings? dst) {
       dst!.ice_gathering_timeout = src.ice_gathering_timeout;
-    }
+    },
+    'register_extra_headers': (Settings src, Settings? dst) {
+      List<String>? register_extra_headers = src.register_extra_headers;
+      if (register_extra_headers == null) return;
+      dst!.register_extra_headers = register_extra_headers;
+    },
   };
 }
 
