@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logger/logger.dart';
+import 'package:sip_ua/src/event_manager/internal_events.dart';
 import 'package:sip_ua/src/map_helper.dart';
 
 import 'config.dart';
@@ -11,6 +12,7 @@ import 'event_manager/subscriber_events.dart';
 import 'logger.dart';
 import 'message.dart';
 import 'rtc_session.dart';
+import 'rtc_session/info.dart';
 import 'rtc_session/refer_subscriber.dart';
 import 'sip_message.dart';
 import 'stack_trace_nj.dart';
@@ -297,6 +299,11 @@ class SIPUAHelper extends EventManager {
         logger.d('session initialized.');
       }, buildCallOptions(true));
     });
+    handlers.on(EventNewInfo(), (EventNewInfo event) async {
+      logger.d('Info received, body: ${event.info!.body}');
+      _notifyCallStateListeners(
+          event, CallState(CallStateEnum.INFO, info: event.info));
+    });
 
     Map<String, dynamic> defaultOptions = <String, dynamic>{
       'eventHandlers': handlers,
@@ -435,7 +442,8 @@ enum CallStateEnum {
   REFER,
   HOLD,
   UNHOLD,
-  CALL_INITIATION
+  CALL_INITIATION,
+  INFO,
 }
 
 class Call {
@@ -597,7 +605,8 @@ class CallState {
       this.video,
       this.stream,
       this.cause,
-      this.refer});
+      this.refer,
+      this.info});
   CallStateEnum state;
   ErrorCause? cause;
   String? originator;
@@ -605,6 +614,7 @@ class CallState {
   bool? video;
   MediaStream? stream;
   EventCallRefer? refer;
+  Info? info;
 }
 
 enum RegistrationStateEnum {
