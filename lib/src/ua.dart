@@ -126,7 +126,7 @@ class UA extends EventManager {
     }
   }
 
-  Uri? _parseUri(String? uriString) {
+  dynamic _parseUri(String? uriString) {
     if (uriString != null) {
       String uri = uriString;
       if (!uri.contains(RegExp(r'^sip:', caseSensitive: false))) {
