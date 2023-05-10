@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:sip_ua/src/config.dart';
+
 import 'constants.dart' as DartSIP_C;
 import 'constants.dart';
 import 'event_manager/event_manager.dart';
@@ -24,7 +26,10 @@ class UnHandledResponse {
 }
 
 class Registrator {
-  Registrator(UA ua, [Transport? transport]) {
+  Registrator(UA ua, Settings configuration, Contact? contact,
+      [Transport? transport])
+      : _configuration = configuration,
+        _uaContact = contact {
     int reg_id = 1; // Force reg_id to 1.
 
     _ua = ua;
@@ -37,7 +42,9 @@ class Registrator {
     _call_id = utils.createRandomToken(22);
     _cseq = 0;
 
-    _to_uri = ua.configuration.uri;
+    _to_uri = _configuration.uri;
+    _from_uri = _configuration.uri;
+    _display_name = _configuration.display_name;
 
     _registrationTimer = null;
 
@@ -48,7 +55,7 @@ class Registrator {
     _registered = false;
 
     // Contact header.
-    _contact = _ua.contact.toString();
+    _contact = _uaContact.toString();
 
     // Sip.ice media feature tag (RFC 5768).
     _contact += ';+sip.ice';
@@ -60,26 +67,28 @@ class Registrator {
     _extraContactParams = '';
 
     // Custom Contact URI params for REGISTER and un-REGISTER.
-    setExtraContactUriParams(
-        ua.configuration.register_extra_contact_uri_params);
+    setExtraContactUriParams(_configuration.register_extra_contact_uri_params);
 
     // Set Custom headers for REGISTER and un-REGISTER.
-    setExtraHeaders(ua.configuration.register_extra_headers);
+    setExtraHeaders(_configuration.register_extra_headers);
 
     if (reg_id != null) {
       _contact += ';reg-id=$reg_id';
-      _contact +=
-          ';+sip.instance="<urn:uuid:${_ua.configuration.instance_id}>"';
+      _contact += ';+sip.instance="<urn:uuid:${_configuration.instance_id}>"';
     }
   }
 
   late UA _ua;
+  final Settings _configuration;
+  final Contact? _uaContact;
   Transport? _transport;
   late URI _registrar;
   int? _expires;
   String? _call_id;
   late int _cseq;
   URI? _to_uri;
+  URI? _from_uri;
+  String? _display_name;
   Timer? _registrationTimer;
   late bool _registering;
   bool _registered = false;
@@ -144,7 +153,9 @@ class Registrator {
         <String, dynamic>{
           'to_uri': _to_uri,
           'call_id': _call_id,
-          'cseq': _cseq += 1
+          'cseq': _cseq += 1,
+          'from_uri': _from_uri,
+          'from_display_name': _display_name,
         },
         extraHeaders);
 
@@ -194,7 +205,7 @@ class Registrator {
           });
           // Get the Contact pointing to us and update the expires value accordingly.
           dynamic contact = contacts.firstWhere(
-              (dynamic element) => element.uri.user == _ua.contact!.uri!.user);
+              (dynamic element) => element.uri.user == _uaContact!.uri!.user);
 
           if (contact == null) {
             logger.d('no Contact header pointing to us, response ignored');
@@ -231,11 +242,11 @@ class Registrator {
 
           // Save gruu values.
           if (contact.hasParam('temp-gruu')) {
-            _ua.contact!.temp_gruu =
+            _uaContact!.temp_gruu =
                 contact.getParam('temp-gruu').replaceAll('"', '');
           }
           if (contact.hasParam('pub-gruu')) {
-            _ua.contact!.pub_gruu =
+            _uaContact!.pub_gruu =
                 contact.getParam('pub-gruu').replaceAll('"', '');
           }
 
@@ -310,7 +321,9 @@ class Registrator {
         <String, dynamic>{
           'to_uri': _to_uri,
           'call_id': _call_id,
-          'cseq': _cseq += 1
+          'cseq': _cseq += 1,
+          'from_uri': _from_uri,
+          'from_display_name': _display_name,
         },
         extraHeaders);
 

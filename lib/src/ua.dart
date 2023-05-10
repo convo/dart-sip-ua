@@ -49,6 +49,14 @@ class DynamicSettings {
   bool? register = false;
 }
 
+class RegisterCredentials {
+  String? uri;
+  String? authorization_user;
+  String? password;
+  String? display_name;
+  List<String>? register_extra_headers;
+}
+
 class Contact {
   Contact(this.uri);
 
@@ -85,7 +93,7 @@ class Contact {
  * @throws {TypeError} If no configuration is given.
  */
 class UA extends EventManager {
-  UA(Settings configuration) {
+  UA(Settings configuration, [List<RegisterCredentials>? credentialsList]) {
     logger.d('new() [configuration:${configuration.toString()}]');
     // Load configuration.
     try {
@@ -97,7 +105,43 @@ class UA extends EventManager {
     }
 
     // Initialize registrator.
-    _registrator = Registrator(this);
+    if (credentialsList == null || credentialsList.isEmpty) {
+      _registrators = <Registrator>[
+        Registrator(this, _configuration, _contact)
+      ];
+    } else {
+      _registrators = <Registrator>[];
+
+      for (RegisterCredentials cred in credentialsList) {
+        final Settings registratorConfig = Settings();
+        registratorConfig.authorization_user = cred.authorization_user;
+        registratorConfig.password = cred.password;
+        registratorConfig.display_name = cred.display_name;
+        registratorConfig.register_extra_headers = cred.register_extra_headers;
+        registratorConfig.instance_id ??= Utils.newUUID();
+        registratorConfig.uri = _parseUri(cred.uri);
+
+        _registrators.add(Registrator(this, registratorConfig, _contact));
+      }
+    }
+  }
+
+  Uri? _parseUri(String? uriString) {
+    if (uriString != null) {
+      String uri = uriString;
+      if (!uri.contains(RegExp(r'^sip:', caseSensitive: false))) {
+        uri = '${DartSIP_C.SIP}:$uri';
+      }
+      dynamic parsed = URI.parse(uri);
+      if (parsed == null) {
+        throw Exceptions.ConfigurationError('uri', parsed);
+      } else if (parsed.user == null) {
+        throw Exceptions.ConfigurationError('uri', parsed);
+      } else {
+        return parsed;
+      }
+    }
+    return null;
   }
 
   final Map<String?, Subscriber> _subscribers = <String?, Subscriber>{};
@@ -124,7 +168,7 @@ class UA extends EventManager {
   final Map<String, dynamic> _data = <String, dynamic>{};
 
   Timer? _closeTimer;
-  late Registrator _registrator;
+  late List<Registrator> _registrators;
 
   int get status => _status;
 
@@ -182,7 +226,7 @@ class UA extends EventManager {
   void register() {
     logger.d('register()');
     _dynConfiguration!.register = true;
-    _registrator.register();
+    _registrators.forEach((Registrator registrator) => registrator.register());
   }
 
   /**
@@ -192,7 +236,8 @@ class UA extends EventManager {
     logger.d('unregister()');
 
     _dynConfiguration!.register = false;
-    _registrator.unregister(all);
+    _registrators
+        .forEach((Registrator registrator) => registrator.unregister(all));
   }
 
   /**
@@ -217,15 +262,24 @@ class UA extends EventManager {
   /**
    * Get the Registrator instance.
    */
-  Registrator? registrator() {
-    return _registrator;
+  List<Registrator>? registrator() {
+    return _registrators;
   }
 
   /**
    * Registration state.
    */
   bool isRegistered() {
-    return _registrator.registered;
+    bool registered = false;
+
+    // is registered if at least one registrator is registered
+    _registrators.forEach((Registrator registrator) {
+      if (registrator.registered) {
+        registered = true;
+      }
+    });
+
+    return registered;
   }
 
   /**
@@ -316,7 +370,7 @@ class UA extends EventManager {
     }
 
     // Close registrator.
-    _registrator.close();
+    _registrators.forEach((Registrator registrator) => registrator.close());
 
     // If there are session wait a bit so CANCEL/BYE can be sent and their responses received.
     int num_sessions = _sessions.length;
@@ -919,7 +973,8 @@ class UA extends EventManager {
     emit(EventSocketConnected(socket: transport.socket));
 
     if (_dynConfiguration!.register!) {
-      _registrator.register();
+      _registrators
+          .forEach((Registrator registrator) => registrator.register());
     }
   }
 
@@ -933,7 +988,8 @@ class UA extends EventManager {
     emit(EventSocketDisconnected(socket: socket, cause: cause));
 
     // Call registrator _onTransportClosed_.
-    _registrator.onTransportClosed();
+    _registrators
+        .forEach((Registrator registrator) => registrator.onTransportClosed());
 
     if (_status != C.STATUS_USER_CLOSED) {
       _status = C.STATUS_NOT_READY;

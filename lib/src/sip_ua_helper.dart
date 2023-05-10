@@ -112,11 +112,23 @@ class SIPUAHelper extends EventManager {
     return _calls[id];
   }
 
-  void start(UaSettings uaSettings) async {
+  void start(UaSettings uaSettings,
+      [List<UaCredentials>? credentialsList]) async {
     if (_ua != null) {
       logger.w('UA instance already exist!, stopping UA and creating a one...');
       _ua!.stop();
     }
+
+    List<RegisterCredentials>? regCredentialsList = credentialsList
+        ?.map(
+          (UaCredentials credentials) => RegisterCredentials()
+            ..authorization_user = credentials.authorization_user
+            ..uri = credentials.uri
+            ..password = credentials.password
+            ..display_name = credentials.display_name
+            ..register_extra_headers = credentials.register_extra_headers,
+        )
+        .toList();
 
     _uaSettings = uaSettings;
 
@@ -144,7 +156,7 @@ class SIPUAHelper extends EventManager {
     _settings.register_extra_headers = uaSettings.registerExtraHeaders;
 
     try {
-      _ua = UA(_settings);
+      _ua = UA(_settings, regCredentialsList);
       _ua!.on(EventSocketConnecting(), (EventSocketConnecting event) {
         logger.d('connecting => $event');
         _notifyTransportStateListeners(
@@ -692,6 +704,14 @@ class WebSocketSettings {
 enum DtmfMode {
   INFO,
   RFC2833,
+}
+
+class UaCredentials {
+  String? uri;
+  String? authorization_user;
+  String? password;
+  String? display_name;
+  List<String>? register_extra_headers;
 }
 
 class UaSettings {
