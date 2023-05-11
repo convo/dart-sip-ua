@@ -1,7 +1,6 @@
 import 'dart:async';
 
-import 'package:sip_ua/src/config.dart';
-
+import 'config.dart';
 import 'constants.dart' as DartSIP_C;
 import 'constants.dart';
 import 'event_manager/event_manager.dart';
@@ -26,9 +25,12 @@ class UnHandledResponse {
 }
 
 class Registrator {
-  Registrator(UA ua, Settings configuration, Contact? contact,
-      [Transport? transport])
-      : _configuration = configuration,
+  Registrator(
+    UA ua,
+    Settings configuration,
+    Contact? contact, [
+    Transport? transport,
+  ])  : _configuration = configuration,
         _uaContact = contact {
     int reg_id = 1; // Force reg_id to 1.
 
