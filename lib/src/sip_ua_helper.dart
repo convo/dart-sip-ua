@@ -4,6 +4,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:logger/logger.dart';
 import 'package:sip_ua/src/event_manager/internal_events.dart';
 import 'package:sip_ua/src/map_helper.dart';
+import 'package:sip_ua/src/registrator.dart';
 
 import 'config.dart';
 import 'constants.dart' as DartSIP_C;
@@ -222,10 +223,37 @@ class SIPUAHelper extends EventManager {
         }
       });
 
+      _ua!.on(EventRegistrationExpiring(), (EventRegistrationExpiring event) {
+        logger.d('EventRegistrationExpiring => $event');
+
+        if (_calls.isEmpty) {
+          logger.d('No calls in progress, re-registering');
+          _reRegister();
+        } else {
+          logger.d(
+              '${_calls.length} call(s) in progress, suspending re-registering until all calls are ended');
+        }
+      });
+
       _ua!.start();
     } catch (event, s) {
       logger.e(event.toString(), null, s);
     }
+  }
+
+  void _checkForReRegister() {
+    if (_calls.isEmpty) {
+      logger.d('All calls ended, re-registering');
+      _reRegister();
+    } else {
+      logger.d('${_calls.length} call(s) still in progress');
+    }
+  }
+
+  void _reRegister() {
+    _ua!
+        .registrator()
+        ?.forEach((Registrator registrator) => registrator.register());
   }
 
   /// Build the call options.
@@ -253,6 +281,7 @@ class SIPUAHelper extends EventManager {
           CallState(CallStateEnum.FAILED,
               originator: event.originator, cause: event.cause));
       _calls.remove(event.id);
+      _checkForReRegister();
     });
     handlers.on(EventCallEnded(), (EventCallEnded event) {
       logger.d('call ended with cause: ${event.cause}');
@@ -261,6 +290,7 @@ class SIPUAHelper extends EventManager {
           CallState(CallStateEnum.ENDED,
               originator: event.originator, cause: event.cause));
       _calls.remove(event.id);
+      _checkForReRegister();
     });
     handlers.on(EventCallAccepted(), (EventCallAccepted event) {
       logger.d('call accepted');
