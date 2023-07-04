@@ -309,6 +309,14 @@ class RTCSession extends EventManager implements Owner {
       extraHeaders.add('Privacy: id');
     }
 
+    if (options.containsKey('from_display_name')) {
+      requestParams['from_display_name'] = options['from_display_name'];
+    }
+
+    if (options.containsKey('from_uri')) {
+      requestParams['from_uri'] = options['from_uri'];
+    }
+
     extraHeaders.add('Contact: $_contact');
     extraHeaders.add('Content-Type: application/sdp');
     if (_sessionTimers.enabled) {

@@ -5,6 +5,7 @@ import 'package:logger/logger.dart';
 import 'package:sip_ua/src/event_manager/internal_events.dart';
 import 'package:sip_ua/src/map_helper.dart';
 import 'package:sip_ua/src/registrator.dart';
+import 'package:sip_ua/src/uri.dart';
 
 import 'config.dart';
 import 'constants.dart' as DartSIP_C;
@@ -93,6 +94,14 @@ class SIPUAHelper extends EventManager {
     if (_ua != null && _ua!.isConnected()) {
       Map<String, dynamic> options = buildCallOptions(voiceonly);
       if (customOptions != null) {
+        if (customOptions.containsKey('from_uri')) {
+          if (!customOptions['from_uri']
+              .contains(RegExp(r'^sip:', caseSensitive: false))) {
+            customOptions['from_uri'] =
+                '${DartSIP_C.SIP}:${customOptions['from_uri']}';
+          }
+          customOptions['from_uri'] = URI.parse(customOptions['from_uri']);
+        }
         options = MapHelper.merge(options, customOptions);
       }
       if (mediaStream != null) {

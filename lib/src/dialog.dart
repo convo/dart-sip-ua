@@ -190,7 +190,8 @@ class Dialog {
           'from_tag': _id!.local_tag,
           'to_uri': _remote_uri,
           'to_tag': _id!.remote_tag,
-          'route_set': _route_set
+          'route_set': _route_set,
+          'from_display_name': _local_uri?.user,
         },
         extraHeaders,
         body);
