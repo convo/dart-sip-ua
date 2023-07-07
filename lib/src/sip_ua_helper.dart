@@ -5,6 +5,7 @@ import 'package:logger/logger.dart';
 import 'package:sip_ua/src/event_manager/internal_events.dart';
 import 'package:sip_ua/src/map_helper.dart';
 import 'package:sip_ua/src/registrator.dart';
+import 'package:sip_ua/src/uri.dart';
 
 import 'config.dart';
 import 'constants.dart' as DartSIP_C;
@@ -91,22 +92,62 @@ class SIPUAHelper extends EventManager {
       List<String>? headers,
       Map<String, dynamic>? customOptions}) async {
     if (_ua != null && _ua!.isConnected()) {
-      Map<String, dynamic> options = buildCallOptions(voiceonly);
-      if (customOptions != null) {
-        options = MapHelper.merge(options, customOptions);
-      }
-      if (mediaStream != null) {
-        options['mediaStream'] = mediaStream;
-      }
-      List<dynamic> extHeaders = options['extraHeaders'] as List<dynamic>;
-      extHeaders.addAll(headers ?? <String>[]);
-      _ua!.call(target, options);
-      return true;
-    } else {
-      logger.e(
-          'Not connected, you will need to register.', null, StackTraceNJ());
+      return _continueCallProcess(
+          voiceonly, customOptions, mediaStream, headers, target);
     }
+    logger.e('Not connected, you will need to register.', null, StackTraceNJ());
+
     return false;
+  }
+
+  bool _continueCallProcess(
+    bool voiceonly,
+    Map<String, dynamic>? customOptions,
+    MediaStream? mediaStream,
+    List<String>? headers,
+    String target,
+  ) {
+    Map<String, dynamic> options = buildCallOptions(voiceonly);
+    options = _addCustomOptions(customOptions, options);
+    options = _addMediaStream(mediaStream, options);
+    List<dynamic> extHeaders = options['extraHeaders'] as List<dynamic>;
+    extHeaders.addAll(headers ?? <String>[]);
+    _ua!.call(target, options);
+
+    return true;
+  }
+
+  Map<String, dynamic> _addMediaStream(
+      MediaStream? mediaStream, Map<String, dynamic> options) {
+    if (mediaStream != null) {
+      options['mediaStream'] = mediaStream;
+    }
+
+    return options;
+  }
+
+  Map<String, dynamic> _addCustomOptions(
+    Map<String, dynamic>? customOptions,
+    Map<String, dynamic> options,
+  ) {
+    if (customOptions != null) {
+      customOptions = _parseFromUriOption(customOptions);
+      return MapHelper.merge(options, customOptions);
+    }
+    return options;
+  }
+
+  Map<String, dynamic> _parseFromUriOption(Map<String, dynamic> customOptions) {
+    if (customOptions.containsKey('from_uri')) {
+      if (!customOptions['from_uri']
+          .contains(RegExp(r'^sip:', caseSensitive: false))) {
+        customOptions['from_uri'] =
+            '${DartSIP_C.SIP}:${customOptions['from_uri']}';
+      }
+      customOptions['from_uri'] = URI.parse(customOptions['from_uri']);
+    }
+
+    return customOptions;
   }
 
   Call? findCall(String id) {
