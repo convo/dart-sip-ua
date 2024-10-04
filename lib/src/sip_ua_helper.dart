@@ -487,12 +487,42 @@ class SIPUAHelper extends EventManager {
       logger.e('Call ${event.id} not found!');
       return;
     }
+
+    // Headers are coming within the IncomingRequest only when event is EventCallEnded
+    if (event is EventCallEnded) {
+      if (event.request?.headers != null) {
+        String? callEndedReason = _getReasonTextFromHeaders(event.request!.headers!);
+        state.callEndReason = callEndedReason;
+      }
+    }
+
     call.state = state.state;
     // Copy to prevent concurrent modification exception
     List<SipUaHelperListener> listeners = _sipUaHelperListeners.toList();
     for (SipUaHelperListener listener in listeners) {
       listener.callStateChanged(call, state);
     }
+  }
+
+  String? _getReasonTextFromHeaders(Map<String?, dynamic> headers) {
+    if (headers.containsKey('Reason') && headers['Reason'] is List) {
+      List<dynamic> reasonHeader = headers['Reason'];
+      
+      for (dynamic reason in reasonHeader) {
+        if (reason is Map<String, dynamic> && reason.containsKey('raw')) {
+          String rawReason = reason['raw'] ?? '';
+          
+          // Use RegExp to extract the 'text' part from the raw string
+          RegExp regExp = RegExp(r'text="([^"]+)"');
+          Match? match = regExp.firstMatch(rawReason);
+
+          if (match != null && match.groupCount > 0) {
+            return match.group(1);
+          }
+        }
+      }
+    }
+    return null;
   }
 
   void _notifyNewMessageListeners(SIPMessageRequest msg) {
@@ -690,7 +720,8 @@ class CallState {
       this.stream,
       this.cause,
       this.refer,
-      this.info});
+      this.info,
+      this.callEndReason});
   CallStateEnum state;
   ErrorCause? cause;
   String? originator;
@@ -699,6 +730,7 @@ class CallState {
   MediaStream? stream;
   EventCallRefer? refer;
   Info? info;
+  String? callEndReason;
 }
 
 enum RegistrationStateEnum {
