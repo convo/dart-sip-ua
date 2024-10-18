@@ -1116,7 +1116,11 @@ class RTCSession extends EventManager implements Owner {
     return true;
   }
 
-  bool renegotiate([Map<String, dynamic>? options, Function? done]) {
+  bool renegotiate([
+    Map<String, dynamic>? options,
+    Function? done,
+    bool? forceRemoteSDP,
+  ]) {
     logger.d('renegotiate()');
 
     options = options ?? <String, dynamic>{};
@@ -1157,11 +1161,14 @@ class RTCSession extends EventManager implements Owner {
         'extraHeaders': options['extraHeaders']
       });
     } else {
-      _sendReinvite(<String, dynamic>{
-        'eventHandlers': handlers,
-        'rtcOfferConstraints': rtcOfferConstraints,
-        'extraHeaders': options['extraHeaders']
-      });
+      _sendReinvite(
+        <String, dynamic>{
+          'eventHandlers': handlers,
+          'rtcOfferConstraints': rtcOfferConstraints,
+          'extraHeaders': options['extraHeaders']
+        },
+        forceRemoteSDP,
+      );
     }
 
     return true;
@@ -1420,7 +1427,8 @@ class RTCSession extends EventManager implements Owner {
   void newInfo(String originator, Info info, dynamic request) {
     logger.d('newInfo()');
 
-    emit(EventNewInfo(session: this, originator: originator, request: request, info: info));
+    emit(EventNewInfo(
+        session: this, originator: originator, request: request, info: info));
   }
 
   /**
@@ -1574,7 +1582,7 @@ class RTCSession extends EventManager implements Owner {
           'optional': <dynamic>[],
         };
     offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(offerConstraints);
+    renegotiate(offerConstraints, null, true);
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
@@ -2468,7 +2476,8 @@ class RTCSession extends EventManager implements Owner {
   /**
    * Send Re-INVITE
    */
-  void _sendReinvite([Map<String, dynamic>? options]) async {
+  void _sendReinvite(
+      [Map<String, dynamic>? options, bool? forceRemoteSDP]) async {
     logger.d('sendReinvite()');
 
     options = options ?? <String, dynamic>{};
@@ -2503,7 +2512,11 @@ class RTCSession extends EventManager implements Owner {
       sendRequest(SipMethod.ACK);
 
       // If it is a 2XX retransmission exit now.
-      if (succeeded != null) {
+      // EA: I really don't understand why this "if" exist
+      // but I prefer to add this flag
+      // since _sendReinvite is used in many places
+      // and this code needs a mayor refactor anyways
+      if (succeeded != null && (forceRemoteSDP == null || !forceRemoteSDP)) {
         return;
       }
 
