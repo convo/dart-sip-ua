@@ -147,6 +147,13 @@ class RTCSession extends EventManager implements Owner {
 
   Future<void> dtmfFuture = (Completer<void>()..complete()).future;
 
+  // Reconnection feature
+  Duration _reconnectionInterval = Duration(seconds: 1);
+  Duration _reconnectionTimeout = Duration(seconds: 15);
+  Timer? _reconnectionTimer;
+  Timer? _reconnectionTimeoutTimer;
+  bool _isReconnecting = false;
+
   @override
   late Function(IncomingRequest) receiveRequest;
 
@@ -1138,12 +1145,14 @@ class RTCSession extends EventManager implements Owner {
 
     EventManager handlers = EventManager();
     handlers.on(EventSucceeded(), (EventSucceeded event) {
+      logger.d('renegotiate EventSucceeded');
       if (done != null) {
         done();
       }
     });
 
     handlers.on(EventCallFailed(), (EventCallFailed event) {
+      logger.d('renegotiate EventCallFailed');
       terminate(<String, dynamic>{
         'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
         'status_code': 500,
@@ -1383,6 +1392,10 @@ class RTCSession extends EventManager implements Owner {
    */
   void onTransportError() {
     logger.e('onTransportError()');
+    if(_isReconnecting) {
+      logger.d('Ignoring onTransportError() while reconnecting');
+      return;
+    }
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
         'status_code': 500,
@@ -1394,14 +1407,48 @@ class RTCSession extends EventManager implements Owner {
 
   void onRequestTimeout() {
     logger.e('onRequestTimeout()');
+    _startReconnection();
+  }
 
-    if (_status != C.STATUS_TERMINATED) {
-      terminate(<String, dynamic>{
-        'status_code': 408,
-        'reason_phrase': DartSIP_C.CausesType.REQUEST_TIMEOUT,
-        'cause': DartSIP_C.CausesType.REQUEST_TIMEOUT
-      });
-    }
+  void _startReconnection() {
+    logger.d('startReconnection()');
+    if (_isReconnecting) return; // Prevent multiple reconnection attempts
+
+    _isReconnecting = true;
+    
+    logger.d('Starting reconnection attempts');
+
+    _reconnectionTimer = Timer.periodic(_reconnectionInterval, (_) {
+      logger.d('ICE restart');
+      _iceRestart();
+    });
+
+    // Set up a timeout timer to stop trying if reconnection takes too long
+    _reconnectionTimeoutTimer = Timer(_reconnectionTimeout, () {
+      logger.d('Reconnection timed out, terminating the call');
+      _terminateDueToReconnectionFailure();
+    });
+  }
+
+  void stopReconnectionTimers() {
+    logger.d('stopReconnectionTimers()');
+    _reconnectionTimer?.cancel();
+    _reconnectionTimeoutTimer?.cancel();
+    _reconnectionTimer = null;
+    _reconnectionTimeoutTimer = null;
+    _isReconnecting = false;
+  }
+
+  void _terminateDueToReconnectionFailure() {
+    logger.d('terminateDueToReconnectionFailure');
+    stopReconnectionTimers();
+
+    // Terminate the call due to reconnection failure
+    terminate(<String, dynamic>{
+      'status_code': 408,
+      'reason_phrase': DartSIP_C.CausesType.REQUEST_TIMEOUT,
+      'cause': DartSIP_C.CausesType.REQUEST_TIMEOUT
+    });
   }
 
   void onDialogError() {
@@ -1591,6 +1638,7 @@ class RTCSession extends EventManager implements Owner {
     _connection!.onIceConnectionState = (RTCIceConnectionState state) {
       // TODO(cloudwebrtc): Do more with different states.
       if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        logger.d('ICE connection failed - terminating the call');
         terminate(<String, dynamic>{
           'cause': DartSIP_C.CausesType.RTP_TIMEOUT,
           'status_code': 408,
@@ -1598,6 +1646,7 @@ class RTCSession extends EventManager implements Owner {
         });
       } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        logger.d('ICE connection disconnected - ICE restart');
         _iceRestart();
       }
     };
@@ -2505,6 +2554,8 @@ class RTCSession extends EventManager implements Owner {
     }
 
     void onSucceeded(IncomingResponse? response) async {
+      stopReconnectionTimers();
+
       if (_status == C.STATUS_TERMINATED) {
         return;
       }
