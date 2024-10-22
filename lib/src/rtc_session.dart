@@ -136,6 +136,9 @@ class RTCSession extends EventManager implements Owner {
 
   late RFC4028Timers _sessionTimers;
 
+  // Ice reconnecting flag
+  bool _isIceConnectionDisconnected = false;
+
   // Map of ReferSubscriber instances indexed by the REFER's CSeq number.
   final Map<int?, ReferSubscriber> _referSubscribers =
       <int?, ReferSubscriber>{};
@@ -146,13 +149,6 @@ class RTCSession extends EventManager implements Owner {
   RTCIceGatheringState? _iceGatheringState;
 
   Future<void> dtmfFuture = (Completer<void>()..complete()).future;
-
-  // Reconnection feature
-  Duration _reconnectionInterval = Duration(seconds: 1);
-  Duration _reconnectionTimeout = Duration(seconds: 15);
-  Timer? _reconnectionTimer;
-  Timer? _reconnectionTimeoutTimer;
-  bool _isReconnecting = false;
 
   @override
   late Function(IncomingRequest) receiveRequest;
@@ -1127,6 +1123,7 @@ class RTCSession extends EventManager implements Owner {
     Map<String, dynamic>? options,
     Function? done,
     bool? forceRemoteSDP,
+    int retryTimes = 0,
   ]) {
     logger.d('renegotiate()');
 
@@ -1177,6 +1174,7 @@ class RTCSession extends EventManager implements Owner {
           'extraHeaders': options['extraHeaders']
         },
         forceRemoteSDP,
+        retryTimes,
       );
     }
 
@@ -1392,10 +1390,6 @@ class RTCSession extends EventManager implements Owner {
    */
   void onTransportError() {
     logger.e('onTransportError()');
-    if(_isReconnecting) {
-      logger.d('Ignoring onTransportError() while reconnecting');
-      return;
-    }
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
         'status_code': 500,
@@ -1405,50 +1399,20 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onRequestTimeout() {
-    logger.e('onRequestTimeout()');
-    _startReconnection();
-  }
+  void onRequestTimeout({ int retryTimes = 0}) {
+    logger.e('onRequestTimeout() - Attempt: $retryTimes');
 
-  void _startReconnection() {
-    logger.d('startReconnection()');
-    if (_isReconnecting) return; // Prevent multiple reconnection attempts
-
-    _isReconnecting = true;
-    
-    logger.d('Starting reconnection attempts');
-
-    _reconnectionTimer = Timer.periodic(_reconnectionInterval, (_) {
-      logger.d('ICE restart');
-      _iceRestart();
-    });
-
-    // Set up a timeout timer to stop trying if reconnection takes too long
-    _reconnectionTimeoutTimer = Timer(_reconnectionTimeout, () {
-      logger.d('Reconnection timed out, terminating the call');
-      _terminateDueToReconnectionFailure();
-    });
-  }
-
-  void stopReconnectionTimers() {
-    logger.d('stopReconnectionTimers()');
-    _reconnectionTimer?.cancel();
-    _reconnectionTimeoutTimer?.cancel();
-    _reconnectionTimer = null;
-    _reconnectionTimeoutTimer = null;
-    _isReconnecting = false;
-  }
-
-  void _terminateDueToReconnectionFailure() {
-    logger.d('terminateDueToReconnectionFailure');
-    stopReconnectionTimers();
-
-    // Terminate the call due to reconnection failure
-    terminate(<String, dynamic>{
-      'status_code': 408,
-      'reason_phrase': DartSIP_C.CausesType.REQUEST_TIMEOUT,
-      'cause': DartSIP_C.CausesType.REQUEST_TIMEOUT
-    });
+    if (retryTimes > 0 ) {
+      retryTimes--;
+      _iceRestart(retryTimes: retryTimes);
+    } else if (_status != C.STATUS_TERMINATED) {
+      retryTimes = 0;
+      terminate(<String, dynamic>{
+        'status_code': 408,
+        'reason_phrase': DartSIP_C.CausesType.REQUEST_TIMEOUT,
+        'cause': DartSIP_C.CausesType.REQUEST_TIMEOUT
+      });
+    }
   }
 
   void onDialogError() {
@@ -1622,20 +1586,21 @@ class RTCSession extends EventManager implements Owner {
     }, Timers.TIMER_H);
   }
 
-  void _iceRestart() async {
+  void _iceRestart({ int retryTimes = 0}) async {
     Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
         <String, dynamic>{
           'mandatory': <String, dynamic>{},
           'optional': <dynamic>[],
         };
     offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(offerConstraints, null, true);
+    renegotiate(offerConstraints, null, true, retryTimes);
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
       Map<String, dynamic> rtcConstraints) async {
     _connection = await createPeerConnection(pcConfig, rtcConstraints);
     _connection!.onIceConnectionState = (RTCIceConnectionState state) {
+      logger.d('onIceConnectionState : $state');
       // TODO(cloudwebrtc): Do more with different states.
       if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         logger.d('ICE connection failed - terminating the call');
@@ -1645,9 +1610,18 @@ class RTCSession extends EventManager implements Owner {
           'reason_phrase': DartSIP_C.CausesType.RTP_TIMEOUT
         });
       } else if (state ==
+          RTCIceConnectionState.RTCIceConnectionStateConnected) {
+          logger.d('ICE connection connected - ICE restart if it is reconnecting');
+          if (_isIceConnectionDisconnected) {
+            logger.d('ICE connection reconnecting - ICE restart');
+            _isIceConnectionDisconnected = false;
+            _iceRestart();
+          }
+      } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        logger.d('ICE connection disconnected - ICE restart');
-        _iceRestart();
+          logger.d('ICE connection disconnected - ICE restart');
+          _isIceConnectionDisconnected = true;
+        _iceRestart(retryTimes: 5);
       }
     };
 
@@ -2525,8 +2499,11 @@ class RTCSession extends EventManager implements Owner {
   /**
    * Send Re-INVITE
    */
-  void _sendReinvite(
-      [Map<String, dynamic>? options, bool? forceRemoteSDP]) async {
+  void _sendReinvite([
+      Map<String, dynamic>? options,
+      bool? forceRemoteSDP,
+      int retryTimes = 0,
+    ]) async {
     logger.d('sendReinvite()');
 
     options = options ?? <String, dynamic>{};
@@ -2554,8 +2531,6 @@ class RTCSession extends EventManager implements Owner {
     }
 
     void onSucceeded(IncomingResponse? response) async {
-      stopReconnectionTimers();
-
       if (_status == C.STATUS_TERMINATED) {
         return;
       }
@@ -2619,7 +2594,7 @@ class RTCSession extends EventManager implements Owner {
         onTransportError(); // Do nothing because session ends.
       });
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
-        onRequestTimeout(); // Do nothing because session ends.
+        onRequestTimeout(retryTimes: retryTimes); // Do nothing because session ends.
       });
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
         onDialogError(); // Do nothing because session ends.
