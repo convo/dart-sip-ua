@@ -136,9 +136,6 @@ class RTCSession extends EventManager implements Owner {
 
   late RFC4028Timers _sessionTimers;
 
-  // Ice reconnecting flag
-  bool _isIceConnectionDisconnected = false;
-
   // Map of ReferSubscriber instances indexed by the REFER's CSeq number.
   final Map<int?, ReferSubscriber> _referSubscribers =
       <int?, ReferSubscriber>{};
@@ -788,9 +785,13 @@ class RTCSession extends EventManager implements Owner {
           * until it has received an ACK for its 2xx response or until the server
           * transaction times out."
           */
+        logger.d('terminate - ${_request.server_transaction.state}');
         if (_status == C.STATUS_WAITING_FOR_ACK &&
             _direction == 'incoming' &&
             _request.server_transaction.state != TransactionState.TERMINATED) {
+          logger.d('terminate - status STATUS_WAITING_FOR_ACK');
+          logger.d('terminate - direction incoming');
+          logger.d('terminate - _request.server_transaction.state TERMINATED');
           /// Save the dialog for later restoration.
           Dialog dialog = _dialog!;
 
@@ -832,6 +833,7 @@ class RTCSession extends EventManager implements Owner {
           // Restore the dialog into 'ua' so the ACK can reach 'this' session.
           _ua.newDialog(dialog);
         } else {
+          logger.d('terminate - else');
           sendRequest(SipMethod.BYE,
               <String, dynamic>{'extraHeaders': extraHeaders, 'body': body});
           reason_phrase = reason_phrase ?? 'Terminated by local';
@@ -1119,7 +1121,7 @@ class RTCSession extends EventManager implements Owner {
     return true;
   }
 
-  bool renegotiate([Map<String, dynamic>? options, Function? done]) {
+  bool renegotiate([Map<String, dynamic>? options, Function? done, int retryTimes = 0]) {
     logger.d('renegotiate()');
 
     options = options ?? <String, dynamic>{};
@@ -1165,8 +1167,10 @@ class RTCSession extends EventManager implements Owner {
       _sendReinvite(<String, dynamic>{
         'eventHandlers': handlers,
         'rtcOfferConstraints': rtcOfferConstraints,
-        'extraHeaders': options['extraHeaders']
-      });
+        'extraHeaders': options['extraHeaders'],
+        },
+        retryTimes,
+      );
     }
 
     return true;
@@ -1584,7 +1588,7 @@ class RTCSession extends EventManager implements Owner {
           'optional': <dynamic>[],
         };
     offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(offerConstraints);
+    renegotiate(offerConstraints, null, retryTimes);
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
@@ -1601,17 +1605,8 @@ class RTCSession extends EventManager implements Owner {
           'reason_phrase': DartSIP_C.CausesType.RTP_TIMEOUT
         });
       } else if (state ==
-          RTCIceConnectionState.RTCIceConnectionStateConnected) {
-          logger.d('ICE connection connected - ICE restart if it is reconnecting');
-          if (_isIceConnectionDisconnected) {
-            logger.d('ICE connection reconnecting - ICE restart');
-            _isIceConnectionDisconnected = false;
-            _iceRestart();
-          }
-      } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
           logger.d('ICE connection disconnected - ICE restart');
-          _isIceConnectionDisconnected = true;
         _iceRestart(retryTimes: 5);
       }
     };
@@ -2490,7 +2485,7 @@ class RTCSession extends EventManager implements Owner {
   /**
    * Send Re-INVITE
    */
-  void _sendReinvite([Map<String, dynamic>? options]) async {
+  void _sendReinvite([Map<String, dynamic>? options, int retryTimes = 0]) async {
     logger.d('sendReinvite()');
 
     options = options ?? <String, dynamic>{};
