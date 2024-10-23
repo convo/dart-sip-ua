@@ -1420,7 +1420,8 @@ class RTCSession extends EventManager implements Owner {
   void newInfo(String originator, Info info, dynamic request) {
     logger.d('newInfo()');
 
-    emit(EventNewInfo(session: this, originator: originator, request: request, info: info));
+    emit(EventNewInfo(
+        session: this, originator: originator, request: request, info: info));
   }
 
   /**
@@ -2503,7 +2504,7 @@ class RTCSession extends EventManager implements Owner {
       sendRequest(SipMethod.ACK);
 
       // If it is a 2XX retransmission exit now.
-      if (succeeded != null) {
+      if (succeeded) {
         return;
       }
 
