@@ -1593,7 +1593,6 @@ class RTCSession extends EventManager implements Owner {
       logger.d('onIceConnectionState : $state');
       // TODO(cloudwebrtc): Do more with different states.
       if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-        logger.d('ICE connection failed - terminating the call');
         terminate(<String, dynamic>{
           'cause': DartSIP_C.CausesType.RTP_TIMEOUT,
           'status_code': 408,
@@ -1601,7 +1600,6 @@ class RTCSession extends EventManager implements Owner {
         });
       } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-          logger.d('ICE connection disconnected - ICE restart');
         _iceRestart(retryTimes: 5);
       }
     };
