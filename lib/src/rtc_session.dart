@@ -1118,7 +1118,7 @@ class RTCSession extends EventManager implements Owner {
     return true;
   }
 
-  bool renegotiate([Map<String, dynamic>? options, Function? done, int retryTimes = 0]) {
+  bool renegotiate([Map<String, dynamic>? options, Function? done]) {
     logger.d('renegotiate()');
 
     options = options ?? <String, dynamic>{};
@@ -1166,7 +1166,6 @@ class RTCSession extends EventManager implements Owner {
         'rtcOfferConstraints': rtcOfferConstraints,
         'extraHeaders': options['extraHeaders'],
         },
-        retryTimes,
       );
     }
 
@@ -1391,14 +1390,9 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onRequestTimeout({ int retryTimes = 0}) {
-    logger.e('onRequestTimeout() - Attempt: $retryTimes');
-
-    if (retryTimes > 0 ) {
-      retryTimes--;
-      _iceRestart(retryTimes: retryTimes);
-    } else if (_status != C.STATUS_TERMINATED) {
-      retryTimes = 0;
+  void onRequestTimeout() {
+    logger.e('onRequestTimeout()');
+    if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
         'status_code': 408,
         'reason_phrase': DartSIP_C.CausesType.REQUEST_TIMEOUT,
@@ -1578,14 +1572,14 @@ class RTCSession extends EventManager implements Owner {
     }, Timers.TIMER_H);
   }
 
-  void _iceRestart({ int retryTimes = 0}) async {
+  void _iceRestart() async {
     Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
         <String, dynamic>{
           'mandatory': <String, dynamic>{},
           'optional': <dynamic>[],
         };
     offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(offerConstraints, null, retryTimes);
+    renegotiate(offerConstraints, null);
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
@@ -1602,7 +1596,7 @@ class RTCSession extends EventManager implements Owner {
         });
       } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        _iceRestart(retryTimes: 0);
+        _iceRestart();
       }
     };
 
@@ -2480,7 +2474,7 @@ class RTCSession extends EventManager implements Owner {
   /**
    * Send Re-INVITE
    */
-  void _sendReinvite([Map<String, dynamic>? options, int retryTimes = 0]) async {
+  void _sendReinvite([Map<String, dynamic>? options]) async {
     logger.d('sendReinvite()');
 
     options = options ?? <String, dynamic>{};
@@ -2567,7 +2561,7 @@ class RTCSession extends EventManager implements Owner {
         onTransportError(); // Do nothing because session ends.
       });
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
-        onRequestTimeout(retryTimes: retryTimes); // Do nothing because session ends.
+        onRequestTimeout(); // Do nothing because session ends.
       });
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
         onDialogError(); // Do nothing because session ends.
