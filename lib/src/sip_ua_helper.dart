@@ -225,15 +225,10 @@ class SIPUAHelper extends EventManager {
         if (isAnyCallEstablished) {
           _calls.forEach((String? key, Call call) {
             logger.d('Renegotiate call $key: Id - ${call.id}');
-            Map<String, dynamic> offerConstraints = call.session.rtcOfferConstraints ??
-              <String, dynamic>{
-                'mandatory': <String, dynamic>{},
-                'optional': <dynamic>[],
-              };
-            offerConstraints['mandatory']['IceRestart'] = true;
-            call.renegotiate(offerConstraints);
+            call.iceRestart();
           });
         }
+
         _registerState = RegistrationState(
             state: RegistrationStateEnum.REGISTERED, cause: event.cause);
         _notifyRegistrationStateListeners(_registerState);
@@ -639,6 +634,11 @@ class Call {
   void renegotiate(Map<String, dynamic> options) {
     assert(_session != null, 'ERROR(renegotiate): rtc session is invalid!');
     _session.renegotiate(options);
+  }
+
+  void iceRestart() {
+    assert(_session != null, 'ERROR(iceRestart): rtc session is invalid!');
+    _session.iceRestart();
   }
 
   void sendDTMF(String tones, [Map<String, dynamic>? options]) {

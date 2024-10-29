@@ -163,8 +163,6 @@ class RTCSession extends EventManager implements Owner {
 
   RTCPeerConnection? get connection => _connection;
 
-  Map<String, dynamic>? get rtcOfferConstraints => _rtcOfferConstraints;
-
   @override
   int get TerminatedCode => C.STATUS_TERMINATED;
 
@@ -1413,6 +1411,9 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
+  // Ice restart - renegotiation
+  void iceRestart() => _iceRestart();
+
   // Called from DTMF handler.
   void newDTMF(String originator, DTMF dtmf, dynamic request) {
     logger.d('newDTMF()');
@@ -1579,7 +1580,7 @@ class RTCSession extends EventManager implements Owner {
           'optional': <dynamic>[],
         };
     offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(offerConstraints, null);
+    renegotiate(offerConstraints);
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
