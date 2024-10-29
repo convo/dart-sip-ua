@@ -220,6 +220,15 @@ class SIPUAHelper extends EventManager {
 
       _ua!.on(EventRegistered(), (EventRegistered event) {
         logger.d('registered => ${event.cause}');
+        bool isAnyCallEstablished = _calls.values.any((Call c) => c.session.isEstablished());
+
+        if (isAnyCallEstablished) {
+          _calls.forEach((String? key, Call call) {
+            logger.d('Renegotiate call $key: Id - ${call.id}');
+            call.iceRestart();
+          });
+        }
+
         _registerState = RegistrationState(
             state: RegistrationStateEnum.REGISTERED, cause: event.cause);
         _notifyRegistrationStateListeners(_registerState);
@@ -279,6 +288,14 @@ class SIPUAHelper extends EventManager {
       _ua!.start();
     } catch (event, s) {
       logger.e(event.toString(), null, s);
+    }
+  }
+
+  Future<void> partialClose() async {
+    if(_ua != null) {
+      await _ua!.partialClose();
+    } else {
+      logger.w('partial close called but _ua is null');
     }
   }
 
@@ -617,6 +634,11 @@ class Call {
   void renegotiate(Map<String, dynamic> options) {
     assert(_session != null, 'ERROR(renegotiate): rtc session is invalid!');
     _session.renegotiate(options);
+  }
+
+  void iceRestart() {
+    assert(_session != null, 'ERROR(iceRestart): rtc session is invalid!');
+    _session.iceRestart();
   }
 
   void sendDTMF(String tones, [Map<String, dynamic>? options]) {

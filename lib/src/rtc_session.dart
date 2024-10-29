@@ -1134,12 +1134,14 @@ class RTCSession extends EventManager implements Owner {
 
     EventManager handlers = EventManager();
     handlers.on(EventSucceeded(), (EventSucceeded event) {
+      logger.d('renegotiate EventSucceeded');
       if (done != null) {
         done();
       }
     });
 
     handlers.on(EventCallFailed(), (EventCallFailed event) {
+      logger.d('renegotiate EventCallFailed');
       terminate(<String, dynamic>{
         'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
         'status_code': 500,
@@ -1160,8 +1162,9 @@ class RTCSession extends EventManager implements Owner {
       _sendReinvite(<String, dynamic>{
         'eventHandlers': handlers,
         'rtcOfferConstraints': rtcOfferConstraints,
-        'extraHeaders': options['extraHeaders']
-      });
+        'extraHeaders': options['extraHeaders'],
+        },
+      );
     }
 
     return true;
@@ -1387,7 +1390,6 @@ class RTCSession extends EventManager implements Owner {
 
   void onRequestTimeout() {
     logger.e('onRequestTimeout()');
-
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
         'status_code': 408,
@@ -1408,6 +1410,9 @@ class RTCSession extends EventManager implements Owner {
       });
     }
   }
+
+  // Ice restart - renegotiation
+  void iceRestart() => _iceRestart();
 
   // Called from DTMF handler.
   void newDTMF(String originator, DTMF dtmf, dynamic request) {
@@ -1582,6 +1587,7 @@ class RTCSession extends EventManager implements Owner {
       Map<String, dynamic> rtcConstraints) async {
     _connection = await createPeerConnection(pcConfig, rtcConstraints);
     _connection!.onIceConnectionState = (RTCIceConnectionState state) {
+      logger.d('onIceConnectionState : $state');
       // TODO(cloudwebrtc): Do more with different states.
       if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         terminate(<String, dynamic>{

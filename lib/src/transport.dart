@@ -141,6 +141,13 @@ class Transport {
             reason_phrase: 'close by local'));
   }
 
+  void forceSocketDisconnect() {
+    logger.d('forceSocketDisconnect()');
+
+    // Disconnect socket to force _onDisconnect method and reconnection logic
+    socket.disconnect();
+  }
+
   bool send(dynamic data) {
     logger.d('send()');
 
