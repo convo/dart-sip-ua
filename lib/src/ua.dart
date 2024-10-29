@@ -427,6 +427,34 @@ class UA extends EventManager {
   }
 
   /**
+   * Remove all transactions,
+   * registrators and disconnect tranport's socket.
+   * 
+   * Used for reconnection feature.
+   */
+  Future<void> partialClose() async {
+    logger.d('partialClose()');
+
+    if (_status == C.STATUS_USER_CLOSED) {
+      logger.d('UA already closed');
+
+      return;
+    }
+
+    // Remove all transactions
+    _transactions.removeAll();
+
+    // Unregister
+    _registrators.forEach((Registrator registrator) => registrator.unregister(false));
+
+    // 1 second delay for waiting unregistration
+    await Future.delayed(Duration(seconds: 1));
+
+    // Force transport's socket disconnect
+    _transport!.forceSocketDisconnect();
+  }
+
+  /**
    * Normalice a string into a valid SIP request URI
    * -param {String} target
    * -returns {DartSIP.URI|null}

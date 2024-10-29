@@ -207,38 +207,12 @@ class SIPUAHelper extends EventManager {
 
       _ua!.on(EventSocketConnected(), (EventSocketConnected event) {
         logger.d('connected => $event');
-        /// Print call information
-        _calls.forEach((String? key, Call call) {
-          logger.d('Call $key: Id - ${call.id}');
-          logger.d('Call $key: State - ${call.state}');
-          logger.d('Call $key: Session status - ${call.session.status}');
-          logger.d('Call $key: Session contact - ${call.session.contact}');
-          logger.d('Call $key: Session direction - ${call.session.direction}');
-          logger.d('Call $key: Session startime - ${call.session.start_time}');
-          logger.d('Call $key: Session endtime - ${call.session.end_time}');
-          logger.d('Call $key: Session isInProgress - ${call.session.isInProgress()}');
-          logger.d('Call $key: Session isEstablished - ${call.session.isEstablished()}');
-          logger.d('Call $key: Session isEnded - ${call.session.isEnded()}');
-        });
         _notifyTransportStateListeners(
             TransportState(TransportStateEnum.CONNECTED));
       });
 
       _ua!.on(EventSocketDisconnected(), (EventSocketDisconnected event) {
         logger.d('disconnected => ${event.cause}');
-        /// Print call information
-        _calls.forEach((String? key, Call call) {
-          logger.d('Call $key: Id - ${call.id}');
-          logger.d('Call $key: State - ${call.state}');
-          logger.d('Call $key: Session status - ${call.session.status}');
-          logger.d('Call $key: Session contact - ${call.session.contact}');
-          logger.d('Call $key: Session direction - ${call.session.direction}');
-          logger.d('Call $key: Session startime - ${call.session.start_time}');
-          logger.d('Call $key: Session endtime - ${call.session.end_time}');
-          logger.d('Call $key: Session isInProgress - ${call.session.isInProgress()}');
-          logger.d('Call $key: Session isEstablished - ${call.session.isEstablished()}');
-          logger.d('Call $key: Session isEnded - ${call.session.isEnded()}');
-        });
         _notifyTransportStateListeners(TransportState(
             TransportStateEnum.DISCONNECTED,
             cause: event.cause));
@@ -266,19 +240,6 @@ class SIPUAHelper extends EventManager {
 
       _ua!.on(EventUnregister(), (EventUnregister event) {
         logger.d('unregistered => ${event.cause}');
-        /// Print call information
-        _calls.forEach((String? key, Call call) {
-          logger.d('Call $key: Id - ${call.id}');
-          logger.d('Call $key: State - ${call.state}');
-          logger.d('Call $key: Session status - ${call.session.status}');
-          logger.d('Call $key: Session contact - ${call.session.contact}');
-          logger.d('Call $key: Session direction - ${call.session.direction}');
-          logger.d('Call $key: Session startime - ${call.session.start_time}');
-          logger.d('Call $key: Session endtime - ${call.session.end_time}');
-          logger.d('Call $key: Session isInProgress - ${call.session.isInProgress()}');
-          logger.d('Call $key: Session isEstablished - ${call.session.isEstablished()}');
-          logger.d('Call $key: Session isEnded - ${call.session.isEnded()}');
-        });
         _registerState = RegistrationState(
             state: RegistrationStateEnum.UNREGISTERED, cause: event.cause);
         _notifyRegistrationStateListeners(_registerState);
@@ -331,6 +292,14 @@ class SIPUAHelper extends EventManager {
       _ua!.start();
     } catch (event, s) {
       logger.e(event.toString(), null, s);
+    }
+  }
+
+  Future<void> partialClose() async {
+    if(_ua != null) {
+      await _ua!.partialClose();
+    } else {
+      logger.w('partial close called but _ua is null');
     }
   }
 

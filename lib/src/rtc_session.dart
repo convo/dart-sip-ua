@@ -785,13 +785,9 @@ class RTCSession extends EventManager implements Owner {
           * until it has received an ACK for its 2xx response or until the server
           * transaction times out."
           */
-        logger.d('terminate - ${_request.server_transaction.state}');
         if (_status == C.STATUS_WAITING_FOR_ACK &&
             _direction == 'incoming' &&
             _request.server_transaction.state != TransactionState.TERMINATED) {
-          logger.d('terminate - status STATUS_WAITING_FOR_ACK');
-          logger.d('terminate - direction incoming');
-          logger.d('terminate - _request.server_transaction.state TERMINATED');
           /// Save the dialog for later restoration.
           Dialog dialog = _dialog!;
 
@@ -833,7 +829,6 @@ class RTCSession extends EventManager implements Owner {
           // Restore the dialog into 'ua' so the ACK can reach 'this' session.
           _ua.newDialog(dialog);
         } else {
-          logger.d('terminate - else');
           sendRequest(SipMethod.BYE,
               <String, dynamic>{'extraHeaders': extraHeaders, 'body': body});
           reason_phrase = reason_phrase ?? 'Terminated by local';

@@ -47,8 +47,8 @@ class Settings {
 
   // Connection options.
   List<WebSocketInterface>? sockets = <WebSocketInterface>[];
-  int connection_recovery_max_interval = 30;
-  int connection_recovery_min_interval = 2;
+  int connection_recovery_max_interval = 1;
+  int connection_recovery_min_interval = 1;
 
   /*
    * Host address.
