@@ -163,6 +163,8 @@ class RTCSession extends EventManager implements Owner {
 
   RTCPeerConnection? get connection => _connection;
 
+  Map<String, dynamic>? get rtcOfferConstraints => _rtcOfferConstraints;
+
   @override
   int get TerminatedCode => C.STATUS_TERMINATED;
 
@@ -1600,7 +1602,7 @@ class RTCSession extends EventManager implements Owner {
         });
       } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        _iceRestart(retryTimes: 5);
+        _iceRestart(retryTimes: 0);
       }
     };
 

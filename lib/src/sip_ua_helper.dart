@@ -220,6 +220,20 @@ class SIPUAHelper extends EventManager {
 
       _ua!.on(EventRegistered(), (EventRegistered event) {
         logger.d('registered => ${event.cause}');
+        bool isAnyCallEstablished = _calls.values.any((Call c) => c.session.isEstablished());
+
+        if (isAnyCallEstablished) {
+          _calls.forEach((String? key, Call call) {
+            logger.d('Renegotiate call $key: Id - ${call.id}');
+            Map<String, dynamic> offerConstraints = call.session.rtcOfferConstraints ??
+              <String, dynamic>{
+                'mandatory': <String, dynamic>{},
+                'optional': <dynamic>[],
+              };
+            offerConstraints['mandatory']['IceRestart'] = true;
+            call.renegotiate(offerConstraints);
+          });
+        }
         _registerState = RegistrationState(
             state: RegistrationStateEnum.REGISTERED, cause: event.cause);
         _notifyRegistrationStateListeners(_registerState);
