@@ -225,7 +225,7 @@ class SIPUAHelper extends EventManager {
         if (isAnyCallEstablished) {
           _calls.forEach((String? key, Call call) {
             logger.d('Renegotiate call $key: Id - ${call.id}');
-            call.iceRestart();
+            call.iceRestart(retryTimes: 3);
           });
         }
 
@@ -636,9 +636,9 @@ class Call {
     _session.renegotiate(options);
   }
 
-  void iceRestart() {
+  void iceRestart({int retryTimes = 0}) {
     assert(_session != null, 'ERROR(iceRestart): rtc session is invalid!');
-    _session.iceRestart();
+    _session.iceRestart(retryTimes);
   }
 
   void sendDTMF(String tones, [Map<String, dynamic>? options]) {
