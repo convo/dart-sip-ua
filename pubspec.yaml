@@ -4,7 +4,7 @@ description: A SIP UA stack for Flutter/Dart, based on flutter-webrtc, support i
 homepage: https://github.com/cloudwebrtc/dart-sip-ua
 environment:
   sdk: ">=2.16.0 <3.0.0"
-  flutter: ">=2.0.0"
+  flutter: ">=3.22.3"
 
 dependencies:
   collection: ^1.15.0
