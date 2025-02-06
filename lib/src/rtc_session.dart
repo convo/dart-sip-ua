@@ -93,6 +93,8 @@ class RTCSession extends EventManager implements Owner {
   // The RTCPeerConnection instance (public attribute).
   RTCPeerConnection? _connection;
 
+  bool _isIceConnectionRetrying = false;
+
   // Incoming/Outgoing request being currently processed.
   dynamic _request;
 
@@ -1116,7 +1118,7 @@ class RTCSession extends EventManager implements Owner {
     return true;
   }
 
-  bool renegotiate([Map<String, dynamic>? options, Function? done]) {
+  bool renegotiate([Map<String, dynamic>? options, Function? done, int retryTimes = 0]) {
     logger.d('renegotiate()');
 
     options = options ?? <String, dynamic>{};
@@ -1135,6 +1137,7 @@ class RTCSession extends EventManager implements Owner {
     EventManager handlers = EventManager();
     handlers.on(EventSucceeded(), (EventSucceeded event) {
       logger.d('renegotiate EventSucceeded');
+      _isIceConnectionRetrying = false;
       if (done != null) {
         done();
       }
@@ -1142,11 +1145,13 @@ class RTCSession extends EventManager implements Owner {
 
     handlers.on(EventCallFailed(), (EventCallFailed event) {
       logger.d('renegotiate EventCallFailed');
-      terminate(<String, dynamic>{
-        'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
-        'status_code': 500,
-        'reason_phrase': 'Media Renegotiation Failed'
-      });
+      if (!_isIceConnectionRetrying) {
+        terminate(<String, dynamic>{
+          'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
+          'status_code': 500,
+          'reason_phrase': 'Media Renegotiation Failed'
+        });
+      }
     });
 
     _setLocalMediaStatus();
@@ -1164,6 +1169,8 @@ class RTCSession extends EventManager implements Owner {
         'rtcOfferConstraints': rtcOfferConstraints,
         'extraHeaders': options['extraHeaders'],
         },
+        retryTimes,
+        true // is renegotiating
       );
     }
 
@@ -1377,8 +1384,12 @@ class RTCSession extends EventManager implements Owner {
   /**
    * Session Callbacks
    */
-  void onTransportError() {
+  void onTransportError([bool isRenegotiating = false]) {
     logger.e('onTransportError()');
+
+    // If the session is trying to ICE restart, do not end the call
+    if (isRenegotiating && _isIceConnectionRetrying) return;
+
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
         'status_code': 500,
@@ -1388,9 +1399,15 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onRequestTimeout() {
-    logger.e('onRequestTimeout()');
-    if (_status != C.STATUS_TERMINATED) {
+  void onRequestTimeout({ int retryTimes = 0}) {
+    logger.e('onRequestTimeout() - Attempt: $retryTimes');
+
+    if (retryTimes > 0 ) {
+      retryTimes--;
+      _iceRestart(retryTimes: retryTimes);
+    } else if (_status != C.STATUS_TERMINATED) {
+      _isIceConnectionRetrying = false;
+      retryTimes = 0;
       terminate(<String, dynamic>{
         'status_code': 408,
         'reason_phrase': DartSIP_C.CausesType.REQUEST_TIMEOUT,
@@ -1399,8 +1416,11 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onDialogError() {
+  void onDialogError([bool isRenegotiating = false]) {
     logger.e('onDialogError()');
+
+    // If the session is trying to ICE restart, do not end the call
+    if (isRenegotiating && _isIceConnectionRetrying) return;
 
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
@@ -1412,7 +1432,7 @@ class RTCSession extends EventManager implements Owner {
   }
 
   // Ice restart - renegotiation
-  void iceRestart() => _iceRestart();
+  void iceRestart([int retryTimes = 0]) => _iceRestart(retryTimes: retryTimes);
 
   // Called from DTMF handler.
   void newDTMF(String originator, DTMF dtmf, dynamic request) {
@@ -1573,14 +1593,14 @@ class RTCSession extends EventManager implements Owner {
     }, Timers.TIMER_H);
   }
 
-  void _iceRestart() async {
+  void _iceRestart({ int retryTimes = 0}) async {
     Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
         <String, dynamic>{
           'mandatory': <String, dynamic>{},
           'optional': <dynamic>[],
         };
     offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(offerConstraints);
+    renegotiate(offerConstraints, null, retryTimes);
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
@@ -1597,7 +1617,8 @@ class RTCSession extends EventManager implements Owner {
         });
       } else if (state ==
           RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        _iceRestart();
+        _isIceConnectionRetrying = true;
+        _iceRestart(retryTimes: 3);
       }
     };
 
@@ -2475,8 +2496,14 @@ class RTCSession extends EventManager implements Owner {
   /**
    * Send Re-INVITE
    */
-  void _sendReinvite([Map<String, dynamic>? options]) async {
+  void _sendReinvite([
+    Map<String, dynamic>? options,
+    int retryTimes = 0,
+    bool isRenegotiating = false,
+    ]) async {
     logger.d('sendReinvite()');
+
+    if (isRenegotiating) logger.d('re-invite from renegotiation');
 
     options = options ?? <String, dynamic>{};
 
@@ -2559,13 +2586,13 @@ class RTCSession extends EventManager implements Owner {
         onFailed(event.response);
       });
       handlers.on(EventOnTransportError(), (EventOnTransportError event) {
-        onTransportError(); // Do nothing because session ends.
+        onTransportError(isRenegotiating); // Do nothing because session ends.
       });
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
-        onRequestTimeout(); // Do nothing because session ends.
+        onRequestTimeout(retryTimes: retryTimes); // Do nothing because session ends.
       });
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
-        onDialogError(); // Do nothing because session ends.
+        onDialogError(isRenegotiating); // Do nothing because session ends.
       });
 
       sendRequest(SipMethod.INVITE, <String, dynamic>{
