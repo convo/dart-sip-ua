@@ -15,8 +15,7 @@ class Grammar {
       }
 
       List<String> strings = ParserErrorFormatter.format(parser.text, messages);
-      print('input => $input, rule => $startRule');
-      print(strings.join('\n'));
+
       throw FormatException();
     }
     return result;
