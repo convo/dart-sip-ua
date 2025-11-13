@@ -92,7 +92,7 @@ class StackTraceNJ implements core.StackTrace {
 
   @override
   String toString() {
-    return formatStackTrace()!;
+    return formatStackTrace() ?? '';
   }
 
   List<Stackframe> _extractFrames() {
