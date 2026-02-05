@@ -1608,7 +1608,7 @@ class RTCSession extends EventManager implements Owner {
     }, Timers.TIMER_H);
   }
 
-  void _iceRestart({int retryTimes = 0}) async {
+  void _iceRestart({int retryTimes = 0}) {
     final Map<String, dynamic> offerConstraints =
         Map<String, dynamic>.from(_rtcOfferConstraints ?? <String, dynamic>{});
 
