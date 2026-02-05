@@ -55,6 +55,7 @@ class SIPTimers {
 class RFC4028Timers {
   RFC4028Timers(this.enabled, this.refreshMethod, this.defaultExpires,
       this.currentExpires, this.running, this.refresher, this.timer);
+
   bool enabled;
   SipMethod refreshMethod;
   int? defaultExpires;
@@ -1118,13 +1119,21 @@ class RTCSession extends EventManager implements Owner {
     return true;
   }
 
-  bool renegotiate([Map<String, dynamic>? options, Function? done, int retryTimes = 0]) {
+  bool renegotiate(
+      [Map<String, dynamic>? options, Function? done, int retryTimes = 0]) {
     logger.d('renegotiate()');
 
     options = options ?? <String, dynamic>{};
 
     Map<String, dynamic>? rtcOfferConstraints =
         options['rtcOfferConstraints'] ?? _rtcOfferConstraints;
+    Map<String, dynamic>? mandatory = (rtcOfferConstraints is Map)
+        ? (rtcOfferConstraints?['mandatory'] as Map<String, dynamic>?)
+        : null;
+    bool isIceRestart =
+        mandatory?['IceRestart'] == true || mandatory?['iceRestart'] == true;
+
+    if (isIceRestart) _isIceConnectionRetrying = true;
 
     if (_status != C.STATUS_WAITING_FOR_ACK && _status != C.STATUS_CONFIRMED) {
       return false;
@@ -1164,13 +1173,15 @@ class RTCSession extends EventManager implements Owner {
         'extraHeaders': options['extraHeaders']
       });
     } else {
-      _sendReinvite(<String, dynamic>{
-        'eventHandlers': handlers,
-        'rtcOfferConstraints': rtcOfferConstraints,
-        'extraHeaders': options['extraHeaders'],
+      logger.w("DART_SIP_UA: Sending reinvite");
+      _sendReinvite(
+        <String, dynamic>{
+          'eventHandlers': handlers,
+          'rtcOfferConstraints': rtcOfferConstraints,
+          'extraHeaders': options['extraHeaders'],
         },
         retryTimes,
-        true // is renegotiating
+        true, // is renegotiating
       );
     }
 
@@ -1399,15 +1410,19 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onRequestTimeout({ int retryTimes = 0}) {
+  void onRequestTimeout({int retryTimes = 0, bool isRenegotiating = false}) {
     logger.e('onRequestTimeout() - Attempt: $retryTimes');
 
-    if (retryTimes > 0 ) {
-      retryTimes--;
-      _iceRestart(retryTimes: retryTimes);
-    } else if (_status != C.STATUS_TERMINATED) {
+    if (isRenegotiating && _isIceConnectionRetrying) {
+      if (retryTimes > 0) {
+        _iceRestart(retryTimes: retryTimes - 1);
+      }
+
+      return;
+    }
+
+    if (_status != C.STATUS_TERMINATED) {
       _isIceConnectionRetrying = false;
-      retryTimes = 0;
       terminate(<String, dynamic>{
         'status_code': 408,
         'reason_phrase': DartSIP_C.CausesType.REQUEST_TIMEOUT,
@@ -1593,14 +1608,27 @@ class RTCSession extends EventManager implements Owner {
     }, Timers.TIMER_H);
   }
 
-  void _iceRestart({ int retryTimes = 0}) async {
-    Map<String, dynamic> offerConstraints = _rtcOfferConstraints ??
-        <String, dynamic>{
-          'mandatory': <String, dynamic>{},
-          'optional': <dynamic>[],
-        };
-    offerConstraints['mandatory']['IceRestart'] = true;
-    renegotiate(offerConstraints, null, retryTimes);
+  void _iceRestart({int retryTimes = 0}) async {
+    final Map<String, dynamic> offerConstraints =
+        Map<String, dynamic>.from(_rtcOfferConstraints ?? <String, dynamic>{});
+
+    offerConstraints['mandatory'] = Map<String, dynamic>.from(
+        offerConstraints['mandatory'] ?? <String, dynamic>{});
+
+    offerConstraints['optional'] =
+        List<dynamic>.from(offerConstraints['optional'] ?? <dynamic>[]);
+
+    offerConstraints['mandatory']['iceRestart'] = true;
+
+    _isIceConnectionRetrying = true;
+
+    renegotiate(
+      <String, dynamic>{
+        'rtcOfferConstraints': offerConstraints,
+      },
+      null,
+      retryTimes,
+    );
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
@@ -2500,7 +2528,7 @@ class RTCSession extends EventManager implements Owner {
     Map<String, dynamic>? options,
     int retryTimes = 0,
     bool isRenegotiating = false,
-    ]) async {
+  ]) async {
     logger.d('sendReinvite()');
 
     if (isRenegotiating) logger.d('re-invite from renegotiation');
@@ -2589,7 +2617,10 @@ class RTCSession extends EventManager implements Owner {
         onTransportError(isRenegotiating); // Do nothing because session ends.
       });
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
-        onRequestTimeout(retryTimes: retryTimes); // Do nothing because session ends.
+        onRequestTimeout(
+          retryTimes: retryTimes,
+          isRenegotiating: isRenegotiating,
+        ); // Do nothing because session ends.
       });
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
         onDialogError(isRenegotiating); // Do nothing because session ends.
