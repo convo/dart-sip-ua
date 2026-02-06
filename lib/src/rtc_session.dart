@@ -1413,7 +1413,7 @@ class RTCSession extends EventManager implements Owner {
   void onRequestTimeout({int retryTimes = 0, bool isRenegotiating = false}) {
     logger.e('onRequestTimeout() - Attempt: $retryTimes');
 
-    if (isRenegotiating && _isIceConnectionRetrying) {
+    if (isRenegotiating || _isIceConnectionRetrying) {
       if (retryTimes > 0) {
         _iceRestart(retryTimes: retryTimes - 1);
       }
