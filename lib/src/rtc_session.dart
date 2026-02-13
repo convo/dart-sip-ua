@@ -44,7 +44,7 @@ class C {
  * Local variables.
  */
 const List<String?> holdMediaTypes = <String?>['audio', 'video'];
-const Duration kIceRestartRetryWindow = Duration(minutes: 10);
+const Duration kIceRestartRetryWindow = Duration(seconds: 150);
 const Duration kIceRestartDebounce = Duration(seconds: 3);
 
 class SIPTimers {
@@ -1434,7 +1434,7 @@ class RTCSession extends EventManager implements Owner {
   void onRequestTimeout({int retryTimes = 0, bool isRenegotiating = false}) {
     logger.e('onRequestTimeout() - Attempt: $retryTimes');
 
-    if (isRenegotiating || _isIceConnectionRetrying) {
+    if (isRenegotiating && _isIceConnectionRetrying) {
       if (_isIceRestartRetryWindowActive) {
         _scheduleIceRestart();
       } else {
@@ -1785,7 +1785,6 @@ class RTCSession extends EventManager implements Owner {
 
   void _onIceConnectionState(RTCIceConnectionState state) {
     logger.d('onIceConnectionState : $state');
-    // TODO(cloudwebrtc): Do more with different states.
     switch (state) {
       case RTCIceConnectionState.RTCIceConnectionStateFailed:
         break;
