@@ -260,7 +260,8 @@ class SIPUAHelper extends EventManager {
         _calls[event.id] =
             Call(event.id, session, CallStateEnum.CALL_INITIATION);
         _notifyCallStateListeners(
-            event, CallState(CallStateEnum.CALL_INITIATION));
+            event,
+            CallState(CallStateEnum.CALL_INITIATION, request: session.request));
       });
 
       _ua!.on(EventNewMessage(), (EventNewMessage event) {
@@ -352,7 +353,8 @@ class SIPUAHelper extends EventManager {
     });
     handlers.on(EventCallAccepted(), (EventCallAccepted event) {
       logger.d('call accepted');
-      _notifyCallStateListeners(event, CallState(CallStateEnum.ACCEPTED));
+      _notifyCallStateListeners(
+          event, CallState(CallStateEnum.ACCEPTED, response: event.response));
     });
     handlers.on(EventCallConfirmed(), (EventCallConfirmed event) {
       logger.d('call confirmed');
@@ -743,7 +745,10 @@ class CallState {
       this.cause,
       this.refer,
       this.info,
-      this.callEndReason});
+      this.callEndReason,
+    this.response,
+    this.request,
+  });
   CallStateEnum state;
   ErrorCause? cause;
   String? originator;
@@ -753,6 +758,8 @@ class CallState {
   EventCallRefer? refer;
   Info? info;
   String? callEndReason;
+  IncomingResponse? response;
+  IncomingRequest? request;
 }
 
 enum RegistrationStateEnum {
