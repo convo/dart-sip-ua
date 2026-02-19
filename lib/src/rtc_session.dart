@@ -44,7 +44,7 @@ class C {
  * Local variables.
  */
 const List<String?> holdMediaTypes = <String?>['audio', 'video'];
-const Duration kIceRestartRetryWindow = Duration(seconds: 150);
+const Duration kIceRestartRetryWindow = Duration(seconds: 180);
 const Duration kIceRestartDebounce = Duration(seconds: 3);
 
 class SIPTimers {
