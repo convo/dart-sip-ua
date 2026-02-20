@@ -44,6 +44,8 @@ class C {
  * Local variables.
  */
 const List<String?> holdMediaTypes = <String?>['audio', 'video'];
+const Duration kIceRestartRetryWindow = Duration(seconds: 180);
+const Duration kIceRestartDebounce = Duration(seconds: 3);
 
 class SIPTimers {
   Timer? ackTimer;
@@ -93,8 +95,14 @@ class RTCSession extends EventManager implements Owner {
 
   // The RTCPeerConnection instance (public attribute).
   RTCPeerConnection? _connection;
+  Map<String, dynamic>? _pcConfig;
+  Map<String, dynamic>? _rtcConstraints;
 
   bool _isIceConnectionRetrying = false;
+  bool _isAutoRecoveringConnection = false;
+  bool _pendingTransportRecovery = false;
+  DateTime? _iceRestartRetryUntil;
+  Timer? _iceRestartDebounceTimer;
 
   // Incoming/Outgoing request being currently processed.
   dynamic _request;
@@ -1133,7 +1141,13 @@ class RTCSession extends EventManager implements Owner {
     bool isIceRestart =
         mandatory?['IceRestart'] == true || mandatory?['iceRestart'] == true;
 
-    if (isIceRestart) _isIceConnectionRetrying = true;
+    if (isIceRestart) {
+      if (_isIceRestartRetryWindowActive) {
+        _isIceConnectionRetrying = true;
+      } else {
+        _startIceRestartRetrying();
+      }
+    }
 
     if (_status != C.STATUS_WAITING_FOR_ACK && _status != C.STATUS_CONFIRMED) {
       return false;
@@ -1146,7 +1160,7 @@ class RTCSession extends EventManager implements Owner {
     EventManager handlers = EventManager();
     handlers.on(EventSucceeded(), (EventSucceeded event) {
       logger.d('renegotiate EventSucceeded');
-      _isIceConnectionRetrying = false;
+      _stopIceRestartRetrying();
       if (done != null) {
         done();
       }
@@ -1154,13 +1168,20 @@ class RTCSession extends EventManager implements Owner {
 
     handlers.on(EventCallFailed(), (EventCallFailed event) {
       logger.d('renegotiate EventCallFailed');
-      if (!_isIceConnectionRetrying) {
-        terminate(<String, dynamic>{
-          'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
-          'status_code': 500,
-          'reason_phrase': 'Media Renegotiation Failed'
-        });
+      if (_isIceConnectionRetrying) {
+        if (_isIceRestartRetryWindowActive) {
+          _scheduleIceRestart();
+        } else {
+          _stopIceRestartRetrying();
+        }
+        return;
       }
+
+      terminate(<String, dynamic>{
+        'cause': DartSIP_C.CausesType.WEBRTC_ERROR,
+        'status_code': 500,
+        'reason_phrase': 'Media Renegotiation Failed'
+      });
     });
 
     _setLocalMediaStatus();
@@ -1413,16 +1434,18 @@ class RTCSession extends EventManager implements Owner {
   void onRequestTimeout({int retryTimes = 0, bool isRenegotiating = false}) {
     logger.e('onRequestTimeout() - Attempt: $retryTimes');
 
-    if (isRenegotiating || _isIceConnectionRetrying) {
-      if (retryTimes > 0) {
-        _iceRestart(retryTimes: retryTimes - 1);
+    if (isRenegotiating && _isIceConnectionRetrying) {
+      if (_isIceRestartRetryWindowActive) {
+        _scheduleIceRestart();
+      } else {
+        _stopIceRestartRetrying();
       }
 
       return;
     }
 
     if (_status != C.STATUS_TERMINATED) {
-      _isIceConnectionRetrying = false;
+      _stopIceRestartRetrying();
       terminate(<String, dynamic>{
         'status_code': 408,
         'reason_phrase': DartSIP_C.CausesType.REQUEST_TIMEOUT,
@@ -1448,6 +1471,18 @@ class RTCSession extends EventManager implements Owner {
 
   // Ice restart - renegotiation
   void iceRestart([int retryTimes = 0]) => _iceRestart(retryTimes: retryTimes);
+
+  void onTransportConnected() {
+    if (!_pendingTransportRecovery) {
+      return;
+    }
+
+    _pendingTransportRecovery = false;
+
+    if (_isIceConnectionRetrying && _isIceRestartRetryWindowActive) {
+      _scheduleIceRestart();
+    }
+  }
 
   // Called from DTMF handler.
   void newDTMF(String originator, DTMF dtmf, dynamic request) {
@@ -1518,6 +1553,7 @@ class RTCSession extends EventManager implements Owner {
     }
 
     // Terminate signaling.
+    _stopIceRestartRetrying();
 
     // Clear SIP timers.
     clearTimeout(_timers.ackTimer);
@@ -1608,7 +1644,61 @@ class RTCSession extends EventManager implements Owner {
     }, Timers.TIMER_H);
   }
 
+  bool get _isIceRestartRetryWindowActive =>
+      _iceRestartRetryUntil != null &&
+      DateTime.now().isBefore(_iceRestartRetryUntil!);
+  bool get _isTransportConnected => _ua.transport?.isConnected() == true;
+
+  void _startIceRestartRetrying() {
+    _isIceConnectionRetrying = true;
+    _iceRestartRetryUntil = DateTime.now().add(kIceRestartRetryWindow);
+  }
+
+  void _stopIceRestartRetrying() {
+    _isIceConnectionRetrying = false;
+    _isAutoRecoveringConnection = false;
+    _pendingTransportRecovery = false;
+    _iceRestartRetryUntil = null;
+    clearTimeout(_iceRestartDebounceTimer);
+    _iceRestartDebounceTimer = null;
+  }
+
+  void _scheduleIceRestart() {
+    if (_status == C.STATUS_TERMINATED || !_isIceRestartRetryWindowActive) {
+      _stopIceRestartRetrying();
+      return;
+    }
+
+    clearTimeout(_iceRestartDebounceTimer);
+    _iceRestartDebounceTimer = setTimeout(() {
+      _iceRestartDebounceTimer = null;
+
+      if (_status == C.STATUS_TERMINATED || !_isIceRestartRetryWindowActive) {
+        _stopIceRestartRetrying();
+        return;
+      }
+
+      if (!_isTransportConnected) {
+        _pendingTransportRecovery = true;
+        return;
+      }
+
+      RTCIceConnectionState? state = _connection?.iceConnectionState;
+      if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        _iceRestart();
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateClosed ||
+          _connection == null) {
+        _autoRecoverConnection();
+      }
+    }, kIceRestartDebounce.inMilliseconds);
+  }
+
   void _iceRestart({int retryTimes = 0}) {
+    if (!_isTransportConnected) {
+      _pendingTransportRecovery = true;
+      return;
+    }
+
     final Map<String, dynamic> offerConstraints =
         Map<String, dynamic>.from(_rtcOfferConstraints ?? <String, dynamic>{});
 
@@ -1620,35 +1710,120 @@ class RTCSession extends EventManager implements Owner {
 
     offerConstraints['mandatory']['iceRestart'] = true;
 
-    _isIceConnectionRetrying = true;
-
-    renegotiate(
+    bool started = renegotiate(
       <String, dynamic>{
         'rtcOfferConstraints': offerConstraints,
       },
       null,
       retryTimes,
     );
+
+    if (!started && _isIceRestartRetryWindowActive) {
+      _scheduleIceRestart();
+    }
+  }
+
+  Future<void> _autoRecoverConnection() async {
+    if (_isAutoRecoveringConnection) {
+      return;
+    }
+
+    if (_status == C.STATUS_TERMINATED || !_isIceRestartRetryWindowActive) {
+      _stopIceRestartRetrying();
+      return;
+    }
+
+    if (_status != C.STATUS_WAITING_FOR_ACK && _status != C.STATUS_CONFIRMED) {
+      return;
+    }
+
+    if (!_isTransportConnected) {
+      _pendingTransportRecovery = true;
+      return;
+    }
+
+    if (_pcConfig == null || _rtcConstraints == null) {
+      logger.w('_autoRecoverConnection() | missing RTCPeerConnection config');
+      return;
+    }
+
+    _isAutoRecoveringConnection = true;
+
+    try {
+      RTCPeerConnection? oldConnection = _connection;
+
+      if (oldConnection != null) {
+        try {
+          await oldConnection.close();
+          await oldConnection.dispose();
+        } catch (_) {}
+      }
+
+      await _createRTCConnection(
+        Map<String, dynamic>.from(_pcConfig!),
+        Map<String, dynamic>.from(_rtcConstraints!),
+      );
+
+      if (_localMediaStream != null) {
+        MediaStream stream = _localMediaStream!;
+        for (MediaStreamTrack track in stream.getTracks()) {
+          _connection!.addTrack(track, stream);
+        }
+      }
+
+      _setLocalMediaStatus();
+      _iceRestart();
+    } catch (error, stacktrace) {
+      logger.e(error.toString(), null, stacktrace);
+      if (_isIceRestartRetryWindowActive) {
+        _scheduleIceRestart();
+      }
+    } finally {
+      _isAutoRecoveringConnection = false;
+    }
+  }
+
+  void _onIceConnectionState(RTCIceConnectionState state) {
+    logger.d('onIceConnectionState : $state');
+    switch (state) {
+      case RTCIceConnectionState.RTCIceConnectionStateFailed:
+        break;
+      case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
+        if (!_isIceConnectionRetrying) {
+          _startIceRestartRetrying();
+        }
+        if (_isIceRestartRetryWindowActive) {
+          _scheduleIceRestart();
+        } else {
+          _stopIceRestartRetrying();
+        }
+        break;
+      case RTCIceConnectionState.RTCIceConnectionStateClosed:
+        if (!_isIceConnectionRetrying) {
+          _startIceRestartRetrying();
+        }
+        if (_isIceRestartRetryWindowActive) {
+          _scheduleIceRestart();
+        } else {
+          _stopIceRestartRetrying();
+        }
+        break;
+      case RTCIceConnectionState.RTCIceConnectionStateConnected:
+      case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+        _stopIceRestartRetrying();
+        break;
+      default:
+      // Not extensive switch so commented for now
+      // throw Exception('Invalid RTCIceConnectionState');
+    }
   }
 
   Future<void> _createRTCConnection(Map<String, dynamic> pcConfig,
       Map<String, dynamic> rtcConstraints) async {
+    _pcConfig = Map<String, dynamic>.from(pcConfig);
+    _rtcConstraints = Map<String, dynamic>.from(rtcConstraints);
     _connection = await createPeerConnection(pcConfig, rtcConstraints);
-    _connection!.onIceConnectionState = (RTCIceConnectionState state) {
-      logger.d('onIceConnectionState : $state');
-      // TODO(cloudwebrtc): Do more with different states.
-      if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-        terminate(<String, dynamic>{
-          'cause': DartSIP_C.CausesType.RTP_TIMEOUT,
-          'status_code': 408,
-          'reason_phrase': DartSIP_C.CausesType.RTP_TIMEOUT
-        });
-      } else if (state ==
-          RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        _isIceConnectionRetrying = true;
-        _iceRestart(retryTimes: 3);
-      }
-    };
+    _connection!.onIceConnectionState = _onIceConnectionState;
 
     // In future versions, unified-plan will be used by default
     String? sdpSemantics = 'unified-plan';

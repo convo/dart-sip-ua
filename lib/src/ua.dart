@@ -1004,6 +1004,12 @@ class UA extends EventManager {
       _registrators
           .forEach((Registrator registrator) => registrator.register());
     }
+
+    _sessions.forEach((String? key, RTCSession session) {
+      if (!session.isEnded()) {
+        session.onTransportConnected();
+      }
+    });
   }
 
 // Transport disconnected event.
