@@ -1419,8 +1419,7 @@ class RTCSession extends EventManager implements Owner {
   void onTransportError([bool isRenegotiating = false]) {
     logger.e('onTransportError()');
 
-    // If the session is trying to ICE restart, do not end the call
-    if (isRenegotiating && _isIceConnectionRetrying) return;
+    if (isCallRecoverable(isRenegotiating)) return;
 
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
@@ -1431,10 +1430,23 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
+  bool isCallRecoverable(bool isRenegotiating) {
+    if (_connection?.iceConnectionState ==
+        RTCIceConnectionState.RTCIceConnectionStateConnected) {
+      return true;
+    }
+
+    if (isRenegotiating || _isIceConnectionRetrying) {
+      return true;
+    }
+
+    return false;
+  }
+
   void onRequestTimeout({int retryTimes = 0, bool isRenegotiating = false}) {
     logger.e('onRequestTimeout() - Attempt: $retryTimes');
 
-    if (isRenegotiating && _isIceConnectionRetrying) {
+    if (isCallRecoverable(isRenegotiating)) {
       if (_isIceRestartRetryWindowActive) {
         _scheduleIceRestart();
       } else {
@@ -1457,8 +1469,7 @@ class RTCSession extends EventManager implements Owner {
   void onDialogError([bool isRenegotiating = false]) {
     logger.e('onDialogError()');
 
-    // If the session is trying to ICE restart, do not end the call
-    if (isRenegotiating && _isIceConnectionRetrying) return;
+    if (isCallRecoverable(isRenegotiating)) return;
 
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
