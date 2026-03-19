@@ -46,6 +46,7 @@ class C {
 const List<String?> holdMediaTypes = <String?>['audio', 'video'];
 const Duration kIceRestartRetryWindow = Duration(seconds: 180);
 const Duration kIceRestartDebounce = Duration(seconds: 3);
+const String kIceDebugLogPrefix = '[ICE_RESTART_DEBUG]';
 
 class SIPTimers {
   Timer? ackTimer;
@@ -1192,6 +1193,7 @@ class RTCSession extends EventManager implements Owner {
     _setLocalMediaStatus();
 
     if (options['useUpdate'] != null) {
+      logger.w('DART_SIP_UA: Sending update');
       _sendUpdate(<String, dynamic>{
         'sdpOffer': true,
         'eventHandlers': handlers,
@@ -1199,7 +1201,7 @@ class RTCSession extends EventManager implements Owner {
         'extraHeaders': options['extraHeaders']
       });
     } else {
-      logger.w("DART_SIP_UA: Sending reinvite");
+      logger.w('DART_SIP_UA: Sending reinvite');
       _sendReinvite(
         <String, dynamic>{
           'eventHandlers': handlers,
@@ -1424,8 +1426,7 @@ class RTCSession extends EventManager implements Owner {
   void onTransportError([bool isRenegotiating = false]) {
     logger.e('onTransportError()');
 
-    // If the session is trying to ICE restart, do not end the call
-    if (isRenegotiating && _isIceConnectionRetrying) return;
+    if (isCallRecoverable(isRenegotiating)) return;
 
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
@@ -1436,10 +1437,23 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
+  bool isCallRecoverable(bool isRenegotiating) {
+    if (_connection?.iceConnectionState ==
+        RTCIceConnectionState.RTCIceConnectionStateConnected) {
+      return true;
+    }
+
+    if (isRenegotiating || _isIceConnectionRetrying) {
+      return true;
+    }
+
+    return false;
+  }
+
   void onRequestTimeout({int retryTimes = 0, bool isRenegotiating = false}) {
     logger.e('onRequestTimeout() - Attempt: $retryTimes');
 
-    if (isRenegotiating && _isIceConnectionRetrying) {
+    if (isCallRecoverable(isRenegotiating)) {
       if (_isIceRestartRetryWindowActive) {
         _scheduleIceRestart();
       } else {
@@ -1462,8 +1476,7 @@ class RTCSession extends EventManager implements Owner {
   void onDialogError([bool isRenegotiating = false]) {
     logger.e('onDialogError()');
 
-    // If the session is trying to ICE restart, do not end the call
-    if (isRenegotiating && _isIceConnectionRetrying) return;
+    if (isCallRecoverable(isRenegotiating)) return;
 
     if (_status != C.STATUS_TERMINATED) {
       terminate(<String, dynamic>{
@@ -1652,7 +1665,15 @@ class RTCSession extends EventManager implements Owner {
   bool get _isIceRestartRetryWindowActive =>
       _iceRestartRetryUntil != null &&
       DateTime.now().isBefore(_iceRestartRetryUntil!);
+
   bool get _isTransportConnected => _ua.transport?.isConnected() == true;
+
+  int _countSdpCandidates(String? sdp) {
+    if (sdp == null || sdp.isEmpty) {
+      return 0;
+    }
+    return RegExp(r'^a=candidate:', multiLine: true).allMatches(sdp).length;
+  }
 
   void _startIceRestartRetrying() {
     _isIceConnectionRetrying = true;
@@ -1713,7 +1734,10 @@ class RTCSession extends EventManager implements Owner {
     offerConstraints['optional'] =
         List<dynamic>.from(offerConstraints['optional'] ?? <dynamic>[]);
 
+    offerConstraints['mandatory']['IceRestart'] = true;
+    offerConstraints['IceRestart'] = true;
     offerConstraints['mandatory']['iceRestart'] = true;
+    offerConstraints['iceRestart'] = true;
 
     bool started = renegotiate(
       <String, dynamic>{
@@ -1877,6 +1901,8 @@ class RTCSession extends EventManager implements Owner {
       String type, Map<String, dynamic>? constraints) async {
     logger.i('createLocalDescription | type=$type');
     _iceGatheringState ??= RTCIceGatheringState.RTCIceGatheringStateNew;
+    logger.d(
+        '$kIceDebugLogPrefix createLocalDescription() | type:$type iceServers:${(_pcConfig?['iceServers'] as List<dynamic>?)?.length ?? 0}');
     Completer<RTCSessionDescription> completer =
         Completer<RTCSessionDescription>();
 
@@ -1940,6 +1966,9 @@ class RTCSession extends EventManager implements Owner {
         _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
         _rtcReady = true;
         RTCSessionDescription? desc = await _connection!.getLocalDescription();
+        int sdpCandidateCount = _countSdpCandidates(desc?.sdp);
+        logger.d(
+            '$kIceDebugLogPrefix createLocalDescription() ready | type:$type candidatesInSdp:$sdpCandidateCount');
         logger.d('emit "sdp"');
         emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
         completer.complete(desc);
@@ -2015,6 +2044,9 @@ class RTCSession extends EventManager implements Owner {
         RTCIceGatheringState.RTCIceGatheringStateComplete) {
       _rtcReady = true;
       RTCSessionDescription? desc = await _connection!.getLocalDescription();
+      int sdpCandidateCount = _countSdpCandidates(desc?.sdp);
+      logger.d(
+          '$kIceDebugLogPrefix createLocalDescription() immediate-complete | type:$type candidatesInSdp:$sdpCandidateCount');
       logger.d('emit "sdp"');
       emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
       return desc;
@@ -2832,6 +2864,13 @@ class RTCSession extends EventManager implements Owner {
       RTCSessionDescription desc =
           await _createLocalDescription('offer', rtcOfferConstraints);
       String? sdp = _mangleOffer(desc.sdp);
+      int sdpCandidateCount = _countSdpCandidates(sdp);
+      if (sdpCandidateCount == 0) {
+        onFailed('Local SDP without ICE candidates');
+        return;
+      }
+      logger.d(
+          '$kIceDebugLogPrefix _sendReinvite() | local SDP candidate count: $sdpCandidateCount');
       logger.d('emit "sdp"');
       emit(EventSdp(originator: 'local', type: 'offer', sdp: sdp));
 
