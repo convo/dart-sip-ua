@@ -154,8 +154,7 @@ class Transport {
     if (!isConnected()) {
       logger.e(
           'unable to send message, transport is not connected. Current state is $status',
-          '',
-          StackTraceNJ());
+          stackTrace: StackTraceNJ());
       return false;
     }
 
