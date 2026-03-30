@@ -62,7 +62,7 @@ class Settings {
   String? hostport_params;
 
   /// ICE Gathering Timeout (in millisecond).
-  int ice_gathering_timeout = 500;
+  int ice_gathering_timeout = 1000;
 
   /// Sip Message Delay (in millisecond) ( default 0 ).
   int sip_message_delay = 0;
