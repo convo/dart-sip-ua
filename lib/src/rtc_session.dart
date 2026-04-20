@@ -46,7 +46,7 @@ class C {
 const List<String?> holdMediaTypes = <String?>['audio', 'video'];
 const Duration kIceRestartRetryWindow = Duration(seconds: 180);
 const Duration kIceRestartDebounce = Duration(seconds: 3);
-const String kIceDebugLogPrefix = '[ICE_RESTART_DEBUG]';
+const int kStrictRenegotiationSdpAttempts = 10;
 
 class SIPTimers {
   Timer? ackTimer;
@@ -104,6 +104,7 @@ class RTCSession extends EventManager implements Owner {
   bool _pendingTransportRecovery = false;
   DateTime? _iceRestartRetryUntil;
   Timer? _iceRestartDebounceTimer;
+  bool reinviteNeeded = false;
 
   // Incoming/Outgoing request being currently processed.
   dynamic _request;
@@ -1132,8 +1133,12 @@ class RTCSession extends EventManager implements Owner {
     return true;
   }
 
-  bool renegotiate(
-      [Map<String, dynamic>? options, Function? done, int retryTimes = 0]) {
+  bool renegotiate([
+    Map<String, dynamic>? options,
+    Function? done,
+    int retryTimes = 0,
+    bool forceRenegotiation = false,
+  ]) {
     logger.d('renegotiate()');
 
     options = options ?? <String, dynamic>{};
@@ -1154,18 +1159,24 @@ class RTCSession extends EventManager implements Owner {
       }
     }
 
-    if (_status != C.STATUS_WAITING_FOR_ACK && _status != C.STATUS_CONFIRMED) {
-      return false;
-    }
+    if (!forceRenegotiation) {
+      if (_status != C.STATUS_WAITING_FOR_ACK &&
+          _status != C.STATUS_CONFIRMED) {
+        return false;
+      }
 
-    if (!_isReadyToReOffer()) {
-      return false;
+      if (!_isReadyToReOffer()) {
+        return false;
+      }
     }
 
     EventManager handlers = EventManager();
+
     handlers.on(EventSucceeded(), (EventSucceeded event) {
       logger.d('renegotiate EventSucceeded');
+
       _stopIceRestartRetrying();
+
       if (done != null) {
         done();
       }
@@ -1674,6 +1685,153 @@ class RTCSession extends EventManager implements Owner {
     return RegExp(r'^a=candidate:', multiLine: true).allMatches(sdp).length;
   }
 
+  String? _getSdpMediaSection(String? sdp, String mediaType) {
+    if (sdp == null || sdp.isEmpty) {
+      return null;
+    }
+
+    final RegExp sectionRegex = RegExp(
+      '^m=${RegExp.escape(mediaType)} [^\\r\\n]*(?:\\r?\\n(?!m=)[^\\r\\n]*)*',
+      multiLine: true,
+    );
+
+    return sectionRegex.firstMatch(sdp)?.group(0);
+  }
+
+  int _countSdpMediaSectionCandidates(String? sdp, String mediaType) {
+    final String? section = _getSdpMediaSection(sdp, mediaType);
+    if (section == null || section.isEmpty) {
+      return 0;
+    }
+
+    return RegExp(r'^a=candidate:', multiLine: true).allMatches(section).length;
+  }
+
+  String _peerConnectionDebugState() {
+    final RTCPeerConnection? connection = _connection;
+    if (connection == null) {
+      return 'pc:null';
+    }
+
+    return 'pc:present signaling:${connection.signalingState} '
+        'ice:${connection.iceConnectionState} gather:${connection.iceGatheringState}';
+  }
+
+  String _constraintsDebugSummary(Map<String, dynamic>? constraints) {
+    if (constraints == null) {
+      return 'constraints:null';
+    }
+
+    final dynamic mandatory = constraints['mandatory'];
+    final dynamic optional = constraints['optional'];
+    final dynamic offerModifiers = constraints['offerModifiers'];
+
+    return 'constraintsKeys:${constraints.keys.join(',')} '
+        'mandatoryKeys:${mandatory is Map ? mandatory.keys.join(',') : '-'} '
+        'optionalCount:${optional is List ? optional.length : 0} '
+        'offerModifiers:${offerModifiers is List ? offerModifiers.length : 0}';
+  }
+
+  String _sdpDebugSummary(String? sdp) {
+    return 'sdpLength:${sdp?.length ?? 0} '
+        'totalCandidates:${_countSdpCandidates(sdp)} '
+        'audioCandidates:${_countSdpMediaSectionCandidates(sdp, 'audio')} '
+        'videoCandidates:${_countSdpMediaSectionCandidates(sdp, 'video')}';
+  }
+
+  String _candidateDebugSummary(RTCIceCandidate candidate) {
+    final String rawCandidate = candidate.candidate ?? '';
+    final String clippedCandidate = rawCandidate.length > 120
+        ? '${rawCandidate.substring(0, 120)}...'
+        : rawCandidate;
+
+    return 'mid:${candidate.sdpMid} mLine:${candidate.sdpMLineIndex} '
+        'candidate:$clippedCandidate';
+  }
+
+  bool _validateStrictRenegotiationSdp(String? sdp, List<String> issues) {
+    if (sdp == null || sdp.isEmpty) {
+      issues.add('empty sdp');
+      return false;
+    }
+
+    for (final String mediaType in <String>['audio', 'video']) {
+      if (_getSdpMediaSection(sdp, mediaType) == null) {
+        issues.add('$mediaType section missing');
+        continue;
+      }
+
+      final int candidates = _countSdpMediaSectionCandidates(sdp, mediaType);
+      if (candidates == 0) {
+        issues.add('$mediaType has 0 candidates');
+      }
+    }
+
+    return issues.isEmpty;
+  }
+
+  Map<String, dynamic>? _cloneRtcOfferConstraints(
+      Map<String, dynamic>? constraints) {
+    if (constraints == null) {
+      return null;
+    }
+
+    final Map<String, dynamic> clonedConstraints =
+        Map<String, dynamic>.from(constraints);
+
+    final dynamic mandatory = constraints['mandatory'];
+    if (mandatory is Map) {
+      clonedConstraints['mandatory'] = Map<String, dynamic>.from(mandatory);
+    }
+
+    final dynamic optional = constraints['optional'];
+    if (optional is List) {
+      clonedConstraints['optional'] = List<dynamic>.from(optional);
+    }
+
+    final dynamic offerModifiers = constraints['offerModifiers'];
+    if (offerModifiers is List) {
+      clonedConstraints['offerModifiers'] = List<dynamic>.from(offerModifiers);
+    }
+
+    return clonedConstraints;
+  }
+
+  Future<String?> _createStrictRenegotiationOfferSdp(
+    Map<String, dynamic>? constraints, {
+    Duration retryDelay = const Duration(seconds: 3),
+  }) async {
+    for (int attempt = 1;
+        attempt <= kStrictRenegotiationSdpAttempts;
+        attempt++) {
+      try {
+        final RTCSessionDescription desc = await _createLocalDescription(
+          'offer',
+          _cloneRtcOfferConstraints(constraints),
+          waitForIceGatheringComplete: true,
+          allowExternalIceReady: false,
+        );
+
+        final String? sdp = _mangleOffer(desc.sdp);
+        final List<String> issues = <String>[];
+
+        if (_validateStrictRenegotiationSdp(sdp, issues)) {
+          return sdp;
+        }
+      } catch (e, st) {
+        logger.e('Error creating strict SDP: $e');
+      }
+
+      final bool hasMoreAttempts = attempt < kStrictRenegotiationSdpAttempts;
+
+      if (hasMoreAttempts) {
+        await Future<void>.delayed(retryDelay);
+      }
+    }
+
+    return null;
+  }
+
   void _startIceRestartRetrying() {
     _isIceConnectionRetrying = true;
     _iceRestartRetryUntil = DateTime.now().add(kIceRestartRetryWindow);
@@ -1686,6 +1844,7 @@ class RTCSession extends EventManager implements Owner {
     _iceRestartRetryUntil = null;
     clearTimeout(_iceRestartDebounceTimer);
     _iceRestartDebounceTimer = null;
+    reinviteNeeded = false;
   }
 
   void _scheduleIceRestart() {
@@ -1744,6 +1903,7 @@ class RTCSession extends EventManager implements Owner {
       },
       null,
       retryTimes,
+      reinviteNeeded,
     );
 
     if (!started && _isIceRestartRetryWindowActive) {
@@ -1771,7 +1931,6 @@ class RTCSession extends EventManager implements Owner {
     }
 
     if (_pcConfig == null || _rtcConstraints == null) {
-      logger.w('_autoRecoverConnection() | missing RTCPeerConnection config');
       return;
     }
 
@@ -1817,6 +1976,8 @@ class RTCSession extends EventManager implements Owner {
       case RTCIceConnectionState.RTCIceConnectionStateFailed:
         break;
       case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
+        reinviteNeeded = true;
+
         if (!_isIceConnectionRetrying) {
           _startIceRestartRetrying();
         }
@@ -1876,17 +2037,18 @@ class RTCSession extends EventManager implements Owner {
         break;
     }
 
-    logger.d('emit "peerconnection"');
     emit(EventPeerConnection(_connection));
     return;
   }
 
   Future<RTCSessionDescription> _createLocalDescription(
-      String type, Map<String, dynamic>? constraints) async {
-    logger.d('createLocalDescription()');
-    _iceGatheringState ??= RTCIceGatheringState.RTCIceGatheringStateNew;
-    logger.d(
-        '$kIceDebugLogPrefix createLocalDescription() | type:$type iceServers:${(_pcConfig?['iceServers'] as List<dynamic>?)?.length ?? 0}');
+    String type,
+    Map<String, dynamic>? constraints, {
+    bool waitForIceGatheringComplete = false,
+    bool allowExternalIceReady = true,
+  }) async {
+    _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateNew;
+
     Completer<RTCSessionDescription> completer =
         Completer<RTCSessionDescription>();
 
@@ -1909,12 +2071,11 @@ class RTCSession extends EventManager implements Owner {
 
     _rtcReady = false;
     late RTCSessionDescription desc;
+
     if (type == 'offer') {
       try {
         desc = await _connection!.createOffer(constraints);
       } catch (error) {
-        logger.e(
-            'emit "peerconnection:createofferfailed" [error:${error.toString()}]');
         emit(EventCreateOfferFailed(exception: error));
         completer.completeError(error);
       }
@@ -1922,8 +2083,6 @@ class RTCSession extends EventManager implements Owner {
       try {
         desc = await _connection!.createAnswer(constraints);
       } catch (error) {
-        logger.e(
-            'emit "peerconnection:createanswerfailed" [error:${error.toString()}]');
         emit(EventCreateAnswerFialed(exception: error));
         completer.completeError(error);
       }
@@ -1931,7 +2090,6 @@ class RTCSession extends EventManager implements Owner {
 
     // Add 'pc.onicencandidate' event handler to resolve on last candidate.
     bool finished = false;
-    int candidateEventsCount = 0;
 
     for (Future<RTCSessionDescription> Function(RTCSessionDescription) modifier
         in modifiers) {
@@ -1946,10 +2104,6 @@ class RTCSession extends EventManager implements Owner {
         _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
         _rtcReady = true;
         RTCSessionDescription? desc = await _connection!.getLocalDescription();
-        int sdpCandidateCount = _countSdpCandidates(desc?.sdp);
-        logger.d(
-            '$kIceDebugLogPrefix createLocalDescription() ready | type:$type candidatesInSdp:$sdpCandidateCount candidateEvents:$candidateEventsCount');
-        logger.d('emit "sdp"');
         emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
         completer.complete(desc);
       }
@@ -1957,26 +2111,26 @@ class RTCSession extends EventManager implements Owner {
 
     _connection!.onIceGatheringState = (RTCIceGatheringState state) {
       _iceGatheringState = state;
-      logger.d('$kIceDebugLogPrefix onIceGatheringState($type) : $state');
+
       if (state == RTCIceGatheringState.RTCIceGatheringStateComplete) {
         ready();
       }
     };
 
     bool hasCandidate = false;
+
     _connection!.onIceCandidate = (RTCIceCandidate candidate) {
       if (candidate != null) {
-        candidateEventsCount++;
-        emit(EventIceCandidate(candidate, ready));
+        emit(EventIceCandidate(
+          candidate,
+          allowExternalIceReady ? ready : () async {},
+        ));
+
         if (!hasCandidate) {
           hasCandidate = true;
-          /**
-           *  Just wait for 0.5 seconds. In the case of multiple network connections,
-           *  the RTCIceGatheringStateComplete event needs to wait for 10 ~ 30 seconds.
-           *  Because trickle ICE is not defined in the sip protocol, the delay of
-           * initiating a call to answer the call waiting will be unacceptable.
-           */
-          if (ua.configuration.ice_gathering_timeout != 0) {
+
+          if (!waitForIceGatheringComplete &&
+              ua.configuration.ice_gathering_timeout != 0) {
             setTimeout(() => ready(), ua.configuration.ice_gathering_timeout);
           }
         }
@@ -1987,8 +2141,7 @@ class RTCSession extends EventManager implements Owner {
       await _connection!.setLocalDescription(desc);
     } catch (error) {
       _rtcReady = true;
-      logger.e(
-          'emit "peerconnection:setlocaldescriptionfailed" [error:${error.toString()}]');
+
       emit(EventSetLocalDescriptionFailed(exception: error));
       completer.completeError(error);
     }
@@ -1998,11 +2151,11 @@ class RTCSession extends EventManager implements Owner {
         RTCIceGatheringState.RTCIceGatheringStateComplete) {
       _rtcReady = true;
       RTCSessionDescription? desc = await _connection!.getLocalDescription();
-      int sdpCandidateCount = _countSdpCandidates(desc?.sdp);
-      logger.d(
-          '$kIceDebugLogPrefix createLocalDescription() immediate-complete | type:$type candidatesInSdp:$sdpCandidateCount candidateEvents:$candidateEventsCount');
+
       logger.d('emit "sdp"');
+
       emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
+
       return desc;
     }
 
@@ -2158,7 +2311,7 @@ class RTCSession extends EventManager implements Owner {
       }
       sendAnswer(desc.sdp);
     } catch (error) {
-      logger.e('Got anerror on re-INVITE: ${error.toString()}');
+      logger.e('Got an error on re-INVITE: ${error.toString()}');
     }
   }
 
@@ -2745,7 +2898,9 @@ class RTCSession extends EventManager implements Owner {
   ]) async {
     logger.d('sendReinvite()');
 
-    if (isRenegotiating) logger.d('re-invite from renegotiation');
+    if (isRenegotiating) {
+      logger.d('re-invite from renegotiation');
+    }
 
     options = options ?? <String, dynamic>{};
 
@@ -2813,38 +2968,40 @@ class RTCSession extends EventManager implements Owner {
     }
 
     try {
-      RTCSessionDescription desc =
-          await _createLocalDescription('offer', rtcOfferConstraints);
-      String? sdp = _mangleOffer(desc.sdp);
-      int sdpCandidateCount = _countSdpCandidates(sdp);
-      if (sdpCandidateCount == 0) {
-        logger.w(
-            '$kIceDebugLogPrefix _sendReinvite() | generated SDP has no ICE candidates. isRenegotiating:$isRenegotiating retryTimes:$retryTimes');
-        onFailed('Local SDP without ICE candidates');
+      String? sdp =
+          await _createStrictRenegotiationOfferSdp(rtcOfferConstraints);
+
+      if (sdp == null) {
+        onFailed('Local SDP failed strict renegotiation validation');
+
         return;
       }
-      logger.d(
-          '$kIceDebugLogPrefix _sendReinvite() | local SDP candidate count: $sdpCandidateCount');
       logger.d('emit "sdp"');
+
       emit(EventSdp(originator: 'local', type: 'offer', sdp: sdp));
 
       EventManager handlers = EventManager();
+
       handlers.on(EventOnSuccessResponse(), (EventOnSuccessResponse event) {
         onSucceeded(event.response as IncomingResponse?);
         succeeded = true;
       });
+
       handlers.on(EventOnErrorResponse(), (EventOnErrorResponse event) {
         onFailed(event.response);
       });
+
       handlers.on(EventOnTransportError(), (EventOnTransportError event) {
         onTransportError(isRenegotiating); // Do nothing because session ends.
       });
+
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
         onRequestTimeout(
           retryTimes: retryTimes,
           isRenegotiating: isRenegotiating,
         ); // Do nothing because session ends.
       });
+
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
         onDialogError(isRenegotiating); // Do nothing because session ends.
       });
@@ -2939,9 +3096,12 @@ class RTCSession extends EventManager implements Owner {
     if (sdpOffer) {
       extraHeaders.add('Content-Type: application/sdp');
       try {
-        RTCSessionDescription desc =
-            await _createLocalDescription('offer', rtcOfferConstraints);
-        String? sdp = _mangleOffer(desc.sdp);
+        String? sdp =
+            await _createStrictRenegotiationOfferSdp(rtcOfferConstraints);
+        if (sdp == null) {
+          onFailed('Local SDP failed strict renegotiation validation');
+          return;
+        }
 
         logger.d('emit "sdp"');
         emit(EventSdp(originator: 'local', type: 'offer', sdp: sdp));
