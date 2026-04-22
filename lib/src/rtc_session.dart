@@ -1174,6 +1174,7 @@ class RTCSession extends EventManager implements Owner {
 
     handlers.on(EventCallFailed(), (EventCallFailed event) {
       logger.d('renegotiate EventCallFailed');
+
       if (_isIceConnectionRetrying) {
         if (_isIceRestartRetryWindowActive) {
           _scheduleIceRestart();
@@ -1473,8 +1474,16 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onDialogError([bool isRenegotiating = false]) {
+  void onDialogError([bool isRenegotiating = false, dynamic response]) {
     logger.e('onDialogError()');
+
+    if (response is IncomingResponse && response.status_code == 481) {
+      terminate(<String, dynamic>{
+        'cause': DartSIP_C.CausesType.CALL_DOES_NOT_EXIST,
+        'status_code': response.status_code,
+        'reason_phrase': DartSIP_C.REASON_PHRASE[response.status_code]
+      });
+    }
 
     if (isCallRecoverable(isRenegotiating)) return;
 
@@ -2817,6 +2826,14 @@ class RTCSession extends EventManager implements Owner {
 
     void onFailed([dynamic response]) {
       eventHandlers.emit(EventCallFailed(session: this, response: response));
+
+      if (response is IncomingResponse && response.status_code == 481) {
+        terminate(<String, dynamic>{
+          'cause': DartSIP_C.CausesType.CALL_DOES_NOT_EXIST,
+          'status_code': response.status_code,
+          'reason_phrase': DartSIP_C.REASON_PHRASE[response.status_code]
+        });
+      }
     }
 
     void onSucceeded(IncomingResponse? response) async {
@@ -2892,7 +2909,7 @@ class RTCSession extends EventManager implements Owner {
         ); // Do nothing because session ends.
       });
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
-        onDialogError(isRenegotiating); // Do nothing because session ends.
+        onDialogError(isRenegotiating, event.response);
       });
 
       sendRequest(SipMethod.INVITE, <String, dynamic>{
