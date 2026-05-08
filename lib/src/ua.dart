@@ -1029,6 +1029,8 @@ class UA extends EventManager {
       _status = C.STATUS_NOT_READY;
       _error = C.NETWORK_ERROR;
     }
+
+    _sessions.forEach((String? key, RTCSession session) => session.reinviteNeeded = true);
   }
 
 // Transport data event.
