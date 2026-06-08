@@ -34,7 +34,6 @@ class Causes {
   static const String USER_DENIED_MEDIA_ACCESS = 'User Denied Media Access';
   static const String BAD_MEDIA_DESCRIPTION = 'Bad Media Description';
   static const String RTP_TIMEOUT = 'RTP Timeout';
-  static const String CALL_DOES_NOT_EXIST = 'Call Does Not Exist';
 }
 
 Map<String, List<int>> SIP_ERROR_CAUSES = <String, List<int>>{
@@ -73,10 +72,10 @@ class CausesType {
   static const String EXPIRES = Causes.EXPIRES;
   static const String NO_ACK = Causes.NO_ACK;
   static const String DIALOG_ERROR = Causes.DIALOG_ERROR;
-  static const String USER_DENIED_MEDIA_ACCESS = Causes.USER_DENIED_MEDIA_ACCESS;
+  static const String USER_DENIED_MEDIA_ACCESS =
+      Causes.USER_DENIED_MEDIA_ACCESS;
   static const String BAD_MEDIA_DESCRIPTION = Causes.BAD_MEDIA_DESCRIPTION;
   static const String RTP_TIMEOUT = Causes.RTP_TIMEOUT;
-  static const String CALL_DOES_NOT_EXIST = Causes.CALL_DOES_NOT_EXIST;
 }
 
 // SIP Methods.
