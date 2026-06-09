@@ -98,6 +98,7 @@ class RTCSession extends EventManager implements Owner {
   Map<String, dynamic>? _pcConfig;
   Map<String, dynamic>? _rtcConstraints;
 
+  Timer? iceGatheringTimer;
   bool _isIceConnectionRetrying = false;
   bool _isAutoRecoveringConnection = false;
   bool _pendingTransportRecovery = false;
@@ -1912,6 +1913,9 @@ class RTCSession extends EventManager implements Owner {
     }
 
     Future<void> ready() async {
+      logger.d(
+          'createLocalDescription() | ready() called with iceGatheringState: $_iceGatheringState');
+      iceGatheringTimer?.cancel();
       if (!finished && _status != C.STATUS_TERMINATED) {
         finished = true;
         _connection!.onIceCandidate = null;
@@ -1923,6 +1927,21 @@ class RTCSession extends EventManager implements Owner {
         emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
         completer.complete(desc);
       }
+    }
+
+    void startIceGatheringTimer() {
+      logger.d(
+          'startIceGatheringTimer() | starting timer for ice gathering timeout');
+      if (iceGatheringTimer != null) {
+        logger.d(
+            'startIceGatheringTimer() | timer already exists, cancelling it');
+        iceGatheringTimer?.cancel();
+      }
+
+      logger.d(
+          'startIceGatheringTimer() | creating new timer for ${ua.configuration.ice_gathering_timeout} milliseconds');
+      iceGatheringTimer =
+          setTimeout(() => ready(), ua.configuration.ice_gathering_timeout);
     }
 
     _connection!.onIceGatheringState = (RTCIceGatheringState state) {
@@ -1938,15 +1957,6 @@ class RTCSession extends EventManager implements Owner {
         emit(EventIceCandidate(candidate, ready));
         if (!hasCandidate) {
           hasCandidate = true;
-          /**
-           *  Just wait for 0.5 seconds. In the case of multiple network connections,
-           *  the RTCIceGatheringStateComplete event needs to wait for 10 ~ 30 seconds.
-           *  Because trickle ICE is not defined in the sip protocol, the delay of
-           * initiating a call to answer the call waiting will be unacceptable.
-           */
-          if (ua.configuration.ice_gathering_timeout != 0) {
-            setTimeout(() => ready(), ua.configuration.ice_gathering_timeout);
-          }
         }
       }
     };
@@ -1955,6 +1965,9 @@ class RTCSession extends EventManager implements Owner {
       await _connection!.setLocalDescription(desc);
     } catch (error) {
       _rtcReady = true;
+      iceGatheringTimer?.cancel();
+      _connection!.onIceCandidate = null;
+      _connection!.onIceGatheringState = null;
       logger.e(
           'emit "peerconnection:setlocaldescriptionfailed" [error:${error.toString()}]');
       emit(EventSetLocalDescriptionFailed(exception: error));
@@ -1969,6 +1982,8 @@ class RTCSession extends EventManager implements Owner {
       logger.d('emit "sdp"');
       emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
       return desc;
+    } else {
+      startIceGatheringTimer();
     }
 
     return completer.future;

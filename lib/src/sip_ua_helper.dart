@@ -881,7 +881,7 @@ class UaSettings {
   bool sessionTimers = true;
 
   /// ICE Gathering Timeout, default 500ms
-  int iceGatheringTimeout = 500;
+  int iceGatheringTimeout = 5000;
 
   /// Sip Message Delay (in millisecond) (default 0).
   int sip_message_delay = 0;
