@@ -23,7 +23,7 @@ class WebSocketImpl {
       {Iterable<String>? protocols,
       required WebSocketSettings webSocketSettings}) async {
     handleQueue();
-    logger.i('connect $_url, ${webSocketSettings.extraHeaders}, $protocols');
+    logger.d('connect $_url, ${webSocketSettings.extraHeaders}, $protocols');
     try {
       if (webSocketSettings.allowBadCertificate) {
         /// Allow self-signed certificate, for test only.

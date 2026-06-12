@@ -21,7 +21,7 @@ class WebSocketImpl {
   void connect(
       {Iterable<String>? protocols,
       required WebSocketSettings webSocketSettings}) async {
-    logger.i('connect $_url, ${webSocketSettings.extraHeaders}, $protocols');
+    logger.d('connect $_url, ${webSocketSettings.extraHeaders}, $protocols');
     try {
       _socket = WebSocket(_url, 'sip');
       _socket!.onOpen.listen((Event e) {
