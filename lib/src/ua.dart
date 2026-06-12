@@ -419,7 +419,7 @@ class UA extends EventManager {
       _transport!.disconnect();
     } else {
       _closeTimer = setTimeout(() {
-        logger.i('Closing connection');
+        logger.d('Closing connection');
         _closeTimer = null;
         _transport!.disconnect();
       }, 2000);
