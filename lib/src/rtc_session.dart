@@ -1789,7 +1789,7 @@ class RTCSession extends EventManager implements Owner {
   }
 
   void _onIceConnectionState(RTCIceConnectionState state) {
-    logger.d('onIceConnectionState : $state');
+    logger.i('ice_connection_state | state=$state');
     switch (state) {
       case RTCIceConnectionState.RTCIceConnectionStateFailed:
         break;
@@ -1827,7 +1827,22 @@ class RTCSession extends EventManager implements Owner {
       Map<String, dynamic> rtcConstraints) async {
     _pcConfig = Map<String, dynamic>.from(pcConfig);
     _rtcConstraints = Map<String, dynamic>.from(rtcConstraints);
-    _connection = await createPeerConnection(pcConfig, rtcConstraints);
+
+    logger.i('createPeerConnection | creating RTCPeerConnection');
+    logger.i(
+        'peer_connection_constraints | pcConfig=$pcConfig rtcConstraints=$rtcConstraints');
+
+    try {
+      _connection = await createPeerConnection(pcConfig, rtcConstraints);
+      logger.i('createPeerConnection | RTCPeerConnection created');
+    } catch (error, stacktrace) {
+      logger.e(
+        'createPeerConnection | failed: ${error.toString()}',
+        stackTrace: stacktrace,
+      );
+      rethrow;
+    }
+
     _connection!.onIceConnectionState = _onIceConnectionState;
 
     // In future versions, unified-plan will be used by default
@@ -1860,7 +1875,7 @@ class RTCSession extends EventManager implements Owner {
 
   Future<RTCSessionDescription> _createLocalDescription(
       String type, Map<String, dynamic>? constraints) async {
-    logger.d('createLocalDescription()');
+    logger.i('createLocalDescription | type=$type');
     _iceGatheringState ??= RTCIceGatheringState.RTCIceGatheringStateNew;
     Completer<RTCSessionDescription> completer =
         Completer<RTCSessionDescription>();
@@ -1882,6 +1897,8 @@ class RTCSession extends EventManager implements Owner {
           'createLocalDescription() | invalid type "$type"'));
     }
 
+    logger.i(
+        'local_description | before_create type=$type iceGatheringState=$_iceGatheringState');
     _rtcReady = false;
     late RTCSessionDescription desc;
     if (type == 'offer') {
@@ -1913,8 +1930,8 @@ class RTCSession extends EventManager implements Owner {
     }
 
     Future<void> ready() async {
-      logger.d(
-          'createLocalDescription() | ready() called with iceGatheringState: $_iceGatheringState');
+      logger.i(
+          'local_description | ready iceGatheringState=$_iceGatheringState');
       iceGatheringTimer?.cancel();
       if (!finished && _status != C.STATUS_TERMINATED) {
         finished = true;
@@ -1945,29 +1962,48 @@ class RTCSession extends EventManager implements Owner {
     }
 
     _connection!.onIceGatheringState = (RTCIceGatheringState state) {
-      _iceGatheringState = state;
-      if (state == RTCIceGatheringState.RTCIceGatheringStateComplete) {
-        ready();
+      try {
+        _iceGatheringState = state;
+        logger.i('ice_gathering_state | state=$state');
+        if (state == RTCIceGatheringState.RTCIceGatheringStateComplete) {
+          ready();
+        }
+      } catch (error, stacktrace) {
+        logger.e(
+          'ice_gathering_state | callback error: ${error.toString()}',
+          stackTrace: stacktrace,
+        );
       }
     };
 
     bool hasCandidate = false;
     _connection!.onIceCandidate = (RTCIceCandidate candidate) {
-      if (candidate != null) {
-        emit(EventIceCandidate(candidate, ready));
-        if (!hasCandidate) {
-          hasCandidate = true;
+      try {
+        if (candidate != null) {
+          logger.i(
+              'ice_candidate | sdpMid=${candidate.sdpMid} sdpMLineIndex=${candidate.sdpMLineIndex}');
+          emit(EventIceCandidate(candidate, ready));
+          if (!hasCandidate) {
+            hasCandidate = true;
+          }
         }
+      } catch (error, stacktrace) {
+        logger.e(
+          'ice_candidate | callback error: ${error.toString()}',
+          stackTrace: stacktrace,
+        );
       }
     };
 
     try {
       await _connection!.setLocalDescription(desc);
+      logger.i('local_description | setLocalDescription success type=$type');
     } catch (error) {
       _rtcReady = true;
       iceGatheringTimer?.cancel();
       _connection!.onIceCandidate = null;
       _connection!.onIceGatheringState = null;
+      logger.i('local_description | setLocalDescription failed type=$type');
       logger.e(
           'emit "peerconnection:setlocaldescriptionfailed" [error:${error.toString()}]');
       emit(EventSetLocalDescriptionFailed(exception: error));
