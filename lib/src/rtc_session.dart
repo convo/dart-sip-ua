@@ -47,6 +47,204 @@ const List<String?> holdMediaTypes = <String?>['audio', 'video'];
 const Duration kIceRestartRetryWindow = Duration(seconds: 180);
 const Duration kIceRestartDebounce = Duration(seconds: 3);
 
+const Duration kIceCandidateSettleDelay = Duration(milliseconds: 250);
+
+class _IceServerSummary {
+  _IceServerSummary({
+    required this.count,
+    required this.stunConfigured,
+    required this.turnConfigured,
+  });
+
+  factory _IceServerSummary.fromPcConfig(Map<String, dynamic>? pcConfig) {
+    dynamic configuredServers = pcConfig?['iceServers'];
+    List<dynamic> servers = configuredServers is Iterable
+        ? configuredServers.toList()
+        : configuredServers == null
+            ? <dynamic>[]
+            : <dynamic>[configuredServers];
+    bool stunConfigured = false;
+    bool turnConfigured = false;
+
+    for (dynamic server in servers) {
+      dynamic configuredUrls = server is Map
+          ? server['urls'] ?? server['url']
+          : server;
+      List<dynamic> urls = configuredUrls is Iterable && configuredUrls is! String
+          ? configuredUrls.toList()
+          : configuredUrls == null
+              ? <dynamic>[]
+              : <dynamic>[configuredUrls];
+      for (dynamic value in urls) {
+        String url = value.toString().toLowerCase();
+        stunConfigured =
+            stunConfigured || url.startsWith('stun:') || url.startsWith('stuns:');
+        turnConfigured =
+            turnConfigured || url.startsWith('turn:') || url.startsWith('turns:');
+      }
+    }
+
+    return _IceServerSummary(
+      count: servers.length,
+      stunConfigured: stunConfigured,
+      turnConfigured: turnConfigured,
+    );
+  }
+
+  final int count;
+  final bool stunConfigured;
+  final bool turnConfigured;
+
+  String get logFields =>
+      'iceServerCount=$count stunConfigured=$stunConfigured '
+      'turnConfigured=$turnConfigured';
+}
+
+class _IceSdpSummary {
+  _IceSdpSummary({
+    required this.total,
+    required this.host,
+    required this.srflx,
+    required this.relay,
+    required this.prflx,
+    required this.unknown,
+    required this.udp,
+    required this.tcp,
+    required this.unknownProtocol,
+    required this.candidatesByMid,
+  });
+
+  factory _IceSdpSummary.fromSdp(String? sdp) {
+    int total = 0;
+    int host = 0;
+    int srflx = 0;
+    int relay = 0;
+    int prflx = 0;
+    int unknown = 0;
+    int udp = 0;
+    int tcp = 0;
+    int unknownProtocol = 0;
+    int currentMediaSection = -1;
+    int sessionLevelCandidates = 0;
+    List<int> candidateCountsBySection = <int>[];
+    List<String?> midsBySection = <String?>[];
+    Map<String, int> candidatesByMid = <String, int>{};
+
+    for (String rawLine in (sdp ?? '').split(RegExp(r'\r?\n'))) {
+      String line = rawLine.trim();
+      if (line.startsWith('m=')) {
+        currentMediaSection += 1;
+        candidateCountsBySection.add(0);
+        midsBySection.add(null);
+        continue;
+      }
+      if (line.startsWith('a=mid:')) {
+        if (currentMediaSection >= 0) {
+          midsBySection[currentMediaSection] =
+              line.substring('a=mid:'.length);
+        }
+        continue;
+      }
+      if (!line.startsWith('a=candidate:')) {
+        continue;
+      }
+
+      total += 1;
+      if (currentMediaSection >= 0) {
+        candidateCountsBySection[currentMediaSection] += 1;
+      } else {
+        sessionLevelCandidates += 1;
+      }
+      switch (candidateType(line)) {
+        case 'host':
+          host += 1;
+          break;
+        case 'srflx':
+          srflx += 1;
+          break;
+        case 'relay':
+          relay += 1;
+          break;
+        case 'prflx':
+          prflx += 1;
+          break;
+        default:
+          unknown += 1;
+      }
+      switch (candidateProtocol(line)) {
+        case 'udp':
+          udp += 1;
+          break;
+        case 'tcp':
+          tcp += 1;
+          break;
+        default:
+          unknownProtocol += 1;
+      }
+    }
+
+    if (sessionLevelCandidates > 0) {
+      candidatesByMid['none'] = sessionLevelCandidates;
+    }
+    for (int index = 0; index < candidateCountsBySection.length; index += 1) {
+      int count = candidateCountsBySection[index];
+      if (count == 0) {
+        continue;
+      }
+      String? mid = midsBySection[index];
+      String key = mid == null || mid.isEmpty ? 'm$index' : mid;
+      candidatesByMid[key] = (candidatesByMid[key] ?? 0) + count;
+    }
+
+    return _IceSdpSummary(
+      total: total,
+      host: host,
+      srflx: srflx,
+      relay: relay,
+      prflx: prflx,
+      unknown: unknown,
+      udp: udp,
+      tcp: tcp,
+      unknownProtocol: unknownProtocol,
+      candidatesByMid: candidatesByMid,
+    );
+  }
+
+  static final RegExp _candidateTypePattern =
+      RegExp(r'(?:^|\s)typ\s+(host|srflx|relay|prflx)(?:\s|$)');
+  static final RegExp _candidateProtocolPattern =
+      RegExp(r'^(?:a=)?candidate:\S+\s+\S+\s+(udp|tcp)(?:\s|$)',
+          caseSensitive: false);
+
+  static String candidateType(String? candidate) {
+    RegExpMatch? match =
+        _candidateTypePattern.firstMatch(candidate ?? '');
+    return match?.group(1) ?? 'unknown';
+  }
+
+  static String candidateProtocol(String? candidate) {
+    RegExpMatch? match =
+        _candidateProtocolPattern.firstMatch(candidate ?? '');
+    return match?.group(1)?.toLowerCase() ?? 'unknown';
+  }
+
+  final int total;
+  final int host;
+  final int srflx;
+  final int relay;
+  final int prflx;
+  final int unknown;
+  final int udp;
+  final int tcp;
+  final int unknownProtocol;
+  final Map<String, int> candidatesByMid;
+
+  String get logFields =>
+      'total=$total host=$host srflx=$srflx relay=$relay '
+      'prflx=$prflx unknown=$unknown udp=$udp tcp=$tcp '
+      'unknownProtocol=$unknownProtocol mids=$candidatesByMid';
+}
+
 class SIPTimers {
   Timer? ackTimer;
   Timer? expiresTimer;
@@ -1828,9 +2026,12 @@ class RTCSession extends EventManager implements Owner {
     _pcConfig = Map<String, dynamic>.from(pcConfig);
     _rtcConstraints = Map<String, dynamic>.from(rtcConstraints);
 
+    _IceServerSummary iceServerSummary =
+        _IceServerSummary.fromPcConfig(pcConfig);
     logger.i('createPeerConnection | creating RTCPeerConnection');
     logger.i(
-        'peer_connection_constraints | pcConfig=$pcConfig rtcConstraints=$rtcConstraints');
+        'peer_connection_constraints | ${iceServerSummary.logFields} '
+        'sdpSemantics=${pcConfig['sdpSemantics'] ?? 'unified-plan'}');
 
     try {
       _connection = await createPeerConnection(pcConfig, rtcConstraints);
@@ -1923,27 +2124,120 @@ class RTCSession extends EventManager implements Owner {
 
     // Add 'pc.onicencandidate' event handler to resolve on last candidate.
     bool finished = false;
+    int candidateCallbacksBeforeReady = 0;
+    Stopwatch iceGatheringStopwatch = Stopwatch();
+    RTCPeerConnection connection = _connection!;
+    Timer? iceCandidateSettleTimer;
+    Future<void> readinessQueue = Future<void>.value();
+    _IceServerSummary iceServerSummary =
+        _IceServerSummary.fromPcConfig(_pcConfig);
+
+    String callId() {
+      try {
+        return _request?.call_id?.toString() ?? 'unknown';
+      } catch (_) {
+        return 'unknown';
+      }
+    }
+
+    void cleanupIceGathering() {
+      iceGatheringTimer?.cancel();
+      iceCandidateSettleTimer?.cancel();
+      connection.onIceCandidate = null;
+      connection.onIceGatheringState = null;
+    }
 
     for (Future<RTCSessionDescription> Function(RTCSessionDescription) modifier
         in modifiers) {
       desc = await modifier(desc);
     }
 
-    Future<void> ready() async {
-      logger.i(
-          'local_description | ready iceGatheringState=$_iceGatheringState');
-      iceGatheringTimer?.cancel();
-      if (!finished && _status != C.STATUS_TERMINATED) {
-        finished = true;
-        _connection!.onIceCandidate = null;
-        _connection!.onIceGatheringState = null;
-        _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
-        _rtcReady = true;
-        RTCSessionDescription? desc = await _connection!.getLocalDescription();
-        logger.d('emit "sdp"');
-        emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
-        completer.complete(desc);
+    Future<void> evaluateReadiness(String trigger,
+        {bool force = false, bool allowReady = true}) async {
+      if (finished) {
+        return;
       }
+      if (_status == C.STATUS_TERMINATED) {
+        cleanupIceGathering();
+        return;
+      }
+
+      RTCSessionDescription? localDescription;
+      try {
+        localDescription = await connection.getLocalDescription();
+      } catch (error) {
+        logger.w(
+            'local_description | decision=deferred callId=${callId()} '
+            'type=$type trigger=$trigger reason=description_read_failed '
+            'elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds} '
+            'errorType=${error.runtimeType}');
+      }
+      if (localDescription == null && force) {
+        localDescription = desc;
+      }
+      if (localDescription == null) {
+        logger.w(
+            'local_description | decision=deferred callId=${callId()} '
+            'type=$type trigger=$trigger reason=missing_description '
+            'elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds}');
+        return;
+      }
+
+      _IceSdpSummary summary =
+          _IceSdpSummary.fromSdp(localDescription.sdp);
+      String? deferredReason;
+      if (!force && summary.total == 0) {
+        deferredReason = 'no_candidates';
+      } else if (!force &&
+          iceServerSummary.turnConfigured &&
+          summary.relay == 0) {
+        deferredReason = 'relay_pending';
+      } else if (!force && !allowReady) {
+        deferredReason = 'settling';
+      }
+
+      if (deferredReason != null) {
+        logger.i(
+            'local_description | decision=deferred callId=${callId()} '
+            'type=$type trigger=$trigger reason=$deferredReason '
+            'elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds} '
+            'turnConfigured=${iceServerSummary.turnConfigured} '
+            'callbacks=$candidateCallbacksBeforeReady ${summary.logFields}');
+        return;
+      }
+
+      finished = true;
+      cleanupIceGathering();
+      _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
+      _rtcReady = true;
+      logger.i(
+          'local_description | decision=ready callId=${callId()} type=$type '
+          'trigger=$trigger elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds} '
+          'turnConfigured=${iceServerSummary.turnConfigured} '
+          'callbacks=$candidateCallbacksBeforeReady ${summary.logFields}');
+      logger.d('emit "sdp"');
+      emit(EventSdp(
+          originator: 'local', type: type, sdp: localDescription.sdp));
+      if (!completer.isCompleted) {
+        completer.complete(localDescription);
+      }
+    }
+
+    Future<void> requestReadinessEvaluation(String trigger,
+        {bool force = false, bool allowReady = true}) {
+      readinessQueue = readinessQueue.then((_) => evaluateReadiness(trigger,
+          force: force, allowReady: allowReady));
+      return readinessQueue;
+    }
+
+    Future<void> requestReadyAfterSettle() async {
+      if (finished || _status == C.STATUS_TERMINATED) {
+        return;
+      }
+      iceCandidateSettleTimer?.cancel();
+      iceCandidateSettleTimer = Timer(kIceCandidateSettleDelay, () {
+        requestReadinessEvaluation('settled');
+      });
     }
 
     void startIceGatheringTimer() {
@@ -1957,16 +2251,21 @@ class RTCSession extends EventManager implements Owner {
 
       logger.d(
           'startIceGatheringTimer() | creating new timer for ${ua.configuration.ice_gathering_timeout} milliseconds');
-      iceGatheringTimer =
-          setTimeout(() => ready(), ua.configuration.ice_gathering_timeout);
+      iceGatheringTimer = setTimeout(() {
+        requestReadinessEvaluation('timeout', force: true);
+      }, ua.configuration.ice_gathering_timeout);
     }
 
-    _connection!.onIceGatheringState = (RTCIceGatheringState state) {
+    connection.onIceGatheringState = (RTCIceGatheringState state) {
       try {
         _iceGatheringState = state;
         logger.i('ice_gathering_state | state=$state');
         if (state == RTCIceGatheringState.RTCIceGatheringStateComplete) {
-          ready();
+          requestReadinessEvaluation('complete',
+              allowReady: !iceServerSummary.turnConfigured);
+          if (iceServerSummary.turnConfigured) {
+            requestReadyAfterSettle();
+          }
         }
       } catch (error, stacktrace) {
         logger.e(
@@ -1976,16 +2275,20 @@ class RTCSession extends EventManager implements Owner {
       }
     };
 
-    bool hasCandidate = false;
-    _connection!.onIceCandidate = (RTCIceCandidate candidate) {
+    connection.onIceCandidate = (RTCIceCandidate candidate) {
       try {
         if (candidate != null) {
+          candidateCallbacksBeforeReady += 1;
           logger.i(
-              'ice_candidate | sdpMid=${candidate.sdpMid} sdpMLineIndex=${candidate.sdpMLineIndex}');
-          emit(EventIceCandidate(candidate, ready));
-          if (!hasCandidate) {
-            hasCandidate = true;
-          }
+              'ice_candidate | callId=${callId()} '
+              'sequence=$candidateCallbacksBeforeReady '
+              'elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds} '
+              'type=${_IceSdpSummary.candidateType(candidate.candidate)} '
+              'protocol=${_IceSdpSummary.candidateProtocol(candidate.candidate)} '
+              'sdpMid=${candidate.sdpMid} '
+              'sdpMLineIndex=${candidate.sdpMLineIndex}');
+          emit(EventIceCandidate(candidate, requestReadyAfterSettle));
+          requestReadyAfterSettle();
         }
       } catch (error, stacktrace) {
         logger.e(
@@ -1996,30 +2299,33 @@ class RTCSession extends EventManager implements Owner {
     };
 
     try {
-      await _connection!.setLocalDescription(desc);
+      iceGatheringStopwatch.start();
+      await connection.setLocalDescription(desc);
       logger.i('local_description | setLocalDescription success type=$type');
     } catch (error) {
       _rtcReady = true;
-      iceGatheringTimer?.cancel();
-      _connection!.onIceCandidate = null;
-      _connection!.onIceGatheringState = null;
+      cleanupIceGathering();
       logger.i('local_description | setLocalDescription failed type=$type');
       logger.e(
           'emit "peerconnection:setlocaldescriptionfailed" [error:${error.toString()}]');
       emit(EventSetLocalDescriptionFailed(exception: error));
       completer.completeError(error);
+      return completer.future;
     }
 
-    // Resolve right away if 'pc.iceGatheringState' is 'complete'.
+    if (!finished && !completer.isCompleted) {
+      startIceGatheringTimer();
+    }
+
+    // Use the same readiness checks if gathering completed before
+    // setLocalDescription returned.
     if (_iceGatheringState ==
         RTCIceGatheringState.RTCIceGatheringStateComplete) {
-      _rtcReady = true;
-      RTCSessionDescription? desc = await _connection!.getLocalDescription();
-      logger.d('emit "sdp"');
-      emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
-      return desc;
-    } else {
-      startIceGatheringTimer();
+      requestReadinessEvaluation('complete',
+          allowReady: !iceServerSummary.turnConfigured);
+      if (iceServerSummary.turnConfigured) {
+        requestReadyAfterSettle();
+      }
     }
 
     return completer.future;
