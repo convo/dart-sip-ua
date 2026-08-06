@@ -15,6 +15,7 @@ import 'name_addr_header.dart';
 import 'request_sender.dart';
 import 'rtc_session/dtmf.dart' as RTCSession_DTMF;
 import 'rtc_session/dtmf.dart';
+import 'rtc_session/ice_summary.dart';
 import 'rtc_session/info.dart' as RTCSession_Info;
 import 'rtc_session/info.dart';
 import 'rtc_session/refer_notifier.dart';
@@ -46,6 +47,8 @@ class C {
 const List<String?> holdMediaTypes = <String?>['audio', 'video'];
 const Duration kIceRestartRetryWindow = Duration(seconds: 180);
 const Duration kIceRestartDebounce = Duration(seconds: 3);
+
+const Duration kIceCandidateSettleDelay = Duration(milliseconds: 250);
 
 class SIPTimers {
   Timer? ackTimer;
@@ -1828,9 +1831,12 @@ class RTCSession extends EventManager implements Owner {
     _pcConfig = Map<String, dynamic>.from(pcConfig);
     _rtcConstraints = Map<String, dynamic>.from(rtcConstraints);
 
+    IceServerSummary iceServerSummary =
+        IceServerSummary.fromPcConfig(pcConfig);
     logger.i('createPeerConnection | creating RTCPeerConnection');
     logger.i(
-        'peer_connection_constraints | pcConfig=$pcConfig rtcConstraints=$rtcConstraints');
+        'peer_connection_constraints | ${iceServerSummary.logFields} '
+        'sdpSemantics=${pcConfig['sdpSemantics'] ?? 'unified-plan'}');
 
     try {
       _connection = await createPeerConnection(pcConfig, rtcConstraints);
@@ -1871,6 +1877,14 @@ class RTCSession extends EventManager implements Owner {
     logger.d('emit "peerconnection"');
     emit(EventPeerConnection(_connection));
     return;
+  }
+
+  String _callIdForLogging() {
+    try {
+      return _request?.call_id?.toString() ?? 'unknown';
+    } catch (_) {
+      return 'unknown';
+    }
   }
 
   Future<RTCSessionDescription> _createLocalDescription(
@@ -1923,27 +1937,112 @@ class RTCSession extends EventManager implements Owner {
 
     // Add 'pc.onicencandidate' event handler to resolve on last candidate.
     bool finished = false;
+    int candidateCallbacksBeforeReady = 0;
+    Stopwatch iceGatheringStopwatch = Stopwatch();
+    RTCPeerConnection connection = _connection!;
+    Timer? iceCandidateSettleTimer;
+    Future<void> readinessQueue = Future<void>.value();
+    IceServerSummary iceServerSummary =
+        IceServerSummary.fromPcConfig(_pcConfig);
+
+    void cleanupIceGathering() {
+      iceGatheringTimer?.cancel();
+      iceCandidateSettleTimer?.cancel();
+      connection.onIceCandidate = null;
+      connection.onIceGatheringState = null;
+    }
 
     for (Future<RTCSessionDescription> Function(RTCSessionDescription) modifier
         in modifiers) {
       desc = await modifier(desc);
     }
 
-    Future<void> ready() async {
-      logger.i(
-          'local_description | ready iceGatheringState=$_iceGatheringState');
-      iceGatheringTimer?.cancel();
-      if (!finished && _status != C.STATUS_TERMINATED) {
-        finished = true;
-        _connection!.onIceCandidate = null;
-        _connection!.onIceGatheringState = null;
-        _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
-        _rtcReady = true;
-        RTCSessionDescription? desc = await _connection!.getLocalDescription();
-        logger.d('emit "sdp"');
-        emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
-        completer.complete(desc);
+    Future<void> evaluateReadiness(String trigger,
+        {bool force = false, bool allowReady = true}) async {
+      if (finished) {
+        return;
       }
+      if (_status == C.STATUS_TERMINATED) {
+        cleanupIceGathering();
+        return;
+      }
+
+      RTCSessionDescription? localDescription;
+      try {
+        localDescription = await connection.getLocalDescription();
+      } catch (error) {
+        logger.w(
+            'local_description | decision=deferred callId=${_callIdForLogging()} '
+            'type=$type trigger=$trigger reason=description_read_failed '
+            'elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds} '
+            'errorType=${error.runtimeType}');
+      }
+      if (localDescription == null && force) {
+        localDescription = desc;
+      }
+      if (localDescription == null) {
+        logger.w(
+            'local_description | decision=deferred callId=${_callIdForLogging()} '
+            'type=$type trigger=$trigger reason=missing_description '
+            'elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds}');
+        return;
+      }
+
+      IceSdpSummary summary =
+          IceSdpSummary.fromSdp(localDescription.sdp);
+      String? deferredReason;
+      if (!force && summary.total == 0) {
+        deferredReason = 'no_candidates';
+      } else if (!force &&
+          iceServerSummary.turnConfigured &&
+          summary.relay == 0) {
+        deferredReason = 'relay_pending';
+      } else if (!force && !allowReady) {
+        deferredReason = 'settling';
+      }
+
+      if (deferredReason != null) {
+        logger.i(
+            'local_description | decision=deferred callId=${_callIdForLogging()} '
+            'type=$type trigger=$trigger reason=$deferredReason '
+            'elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds} '
+            'turnConfigured=${iceServerSummary.turnConfigured} '
+            'callbacks=$candidateCallbacksBeforeReady ${summary.logFields}');
+        return;
+      }
+
+      finished = true;
+      cleanupIceGathering();
+      _iceGatheringState = RTCIceGatheringState.RTCIceGatheringStateComplete;
+      _rtcReady = true;
+      logger.i(
+          'local_description | decision=ready callId=${_callIdForLogging()} type=$type '
+          'trigger=$trigger elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds} '
+          'turnConfigured=${iceServerSummary.turnConfigured} '
+          'callbacks=$candidateCallbacksBeforeReady ${summary.logFields}');
+      logger.d('emit "sdp"');
+      emit(EventSdp(
+          originator: 'local', type: type, sdp: localDescription.sdp));
+      if (!completer.isCompleted) {
+        completer.complete(localDescription);
+      }
+    }
+
+    Future<void> requestReadinessEvaluation(String trigger,
+        {bool force = false, bool allowReady = true}) {
+      readinessQueue = readinessQueue.then((_) => evaluateReadiness(trigger,
+          force: force, allowReady: allowReady));
+      return readinessQueue;
+    }
+
+    Future<void> requestReadyAfterSettle() async {
+      if (finished || _status == C.STATUS_TERMINATED) {
+        return;
+      }
+      iceCandidateSettleTimer?.cancel();
+      iceCandidateSettleTimer = Timer(kIceCandidateSettleDelay, () {
+        requestReadinessEvaluation('settled');
+      });
     }
 
     void startIceGatheringTimer() {
@@ -1957,16 +2056,21 @@ class RTCSession extends EventManager implements Owner {
 
       logger.d(
           'startIceGatheringTimer() | creating new timer for ${ua.configuration.ice_gathering_timeout} milliseconds');
-      iceGatheringTimer =
-          setTimeout(() => ready(), ua.configuration.ice_gathering_timeout);
+      iceGatheringTimer = setTimeout(() {
+        requestReadinessEvaluation('timeout', force: true);
+      }, ua.configuration.ice_gathering_timeout);
     }
 
-    _connection!.onIceGatheringState = (RTCIceGatheringState state) {
+    connection.onIceGatheringState = (RTCIceGatheringState state) {
       try {
         _iceGatheringState = state;
         logger.i('ice_gathering_state | state=$state');
         if (state == RTCIceGatheringState.RTCIceGatheringStateComplete) {
-          ready();
+          requestReadinessEvaluation('complete',
+              allowReady: !iceServerSummary.turnConfigured);
+          if (iceServerSummary.turnConfigured) {
+            requestReadyAfterSettle();
+          }
         }
       } catch (error, stacktrace) {
         logger.e(
@@ -1976,16 +2080,20 @@ class RTCSession extends EventManager implements Owner {
       }
     };
 
-    bool hasCandidate = false;
-    _connection!.onIceCandidate = (RTCIceCandidate candidate) {
+    connection.onIceCandidate = (RTCIceCandidate candidate) {
       try {
         if (candidate != null) {
+          candidateCallbacksBeforeReady += 1;
           logger.i(
-              'ice_candidate | sdpMid=${candidate.sdpMid} sdpMLineIndex=${candidate.sdpMLineIndex}');
-          emit(EventIceCandidate(candidate, ready));
-          if (!hasCandidate) {
-            hasCandidate = true;
-          }
+              'ice_candidate | callId=${_callIdForLogging()} '
+              'sequence=$candidateCallbacksBeforeReady '
+              'elapsedMs=${iceGatheringStopwatch.elapsedMilliseconds} '
+              'type=${IceSdpSummary.candidateType(candidate.candidate)} '
+              'protocol=${IceSdpSummary.candidateProtocol(candidate.candidate)} '
+              'sdpMid=${candidate.sdpMid} '
+              'sdpMLineIndex=${candidate.sdpMLineIndex}');
+          emit(EventIceCandidate(candidate, requestReadyAfterSettle));
+          requestReadyAfterSettle();
         }
       } catch (error, stacktrace) {
         logger.e(
@@ -1996,30 +2104,33 @@ class RTCSession extends EventManager implements Owner {
     };
 
     try {
-      await _connection!.setLocalDescription(desc);
+      iceGatheringStopwatch.start();
+      await connection.setLocalDescription(desc);
       logger.i('local_description | setLocalDescription success type=$type');
     } catch (error) {
       _rtcReady = true;
-      iceGatheringTimer?.cancel();
-      _connection!.onIceCandidate = null;
-      _connection!.onIceGatheringState = null;
+      cleanupIceGathering();
       logger.i('local_description | setLocalDescription failed type=$type');
       logger.e(
           'emit "peerconnection:setlocaldescriptionfailed" [error:${error.toString()}]');
       emit(EventSetLocalDescriptionFailed(exception: error));
       completer.completeError(error);
+      return completer.future;
     }
 
-    // Resolve right away if 'pc.iceGatheringState' is 'complete'.
+    if (!finished && !completer.isCompleted) {
+      startIceGatheringTimer();
+    }
+
+    // Use the same readiness checks if gathering completed before
+    // setLocalDescription returned.
     if (_iceGatheringState ==
         RTCIceGatheringState.RTCIceGatheringStateComplete) {
-      _rtcReady = true;
-      RTCSessionDescription? desc = await _connection!.getLocalDescription();
-      logger.d('emit "sdp"');
-      emit(EventSdp(originator: 'local', type: type, sdp: desc!.sdp));
-      return desc;
-    } else {
-      startIceGatheringTimer();
+      requestReadinessEvaluation('complete',
+          allowReady: !iceServerSummary.turnConfigured);
+      if (iceServerSummary.turnConfigured) {
+        requestReadyAfterSettle();
+      }
     }
 
     return completer.future;
