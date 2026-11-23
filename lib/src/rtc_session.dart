@@ -1211,6 +1211,7 @@ class RTCSession extends EventManager implements Owner {
         },
         retryTimes,
         true, // is renegotiating
+        isIceRestart,
       );
     }
 
@@ -1424,8 +1425,16 @@ class RTCSession extends EventManager implements Owner {
   /**
    * Session Callbacks
    */
-  void onTransportError([bool isRenegotiating = false]) {
+  void onTransportError([
+    bool isRenegotiating = false,
+    bool isIceRestart = false,
+  ]) {
     logger.e('onTransportError()');
+
+    if (isIceRestart) {
+      _onIceRestartRequestFailed('transport error');
+      return;
+    }
 
     // If the session is trying to ICE restart, do not end the call
     if (isRenegotiating && _isIceConnectionRetrying) return;
@@ -1439,8 +1448,17 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onRequestTimeout({int retryTimes = 0, bool isRenegotiating = false}) {
+  void onRequestTimeout({
+    int retryTimes = 0,
+    bool isRenegotiating = false,
+    bool isIceRestart = false,
+  }) {
     logger.e('onRequestTimeout() - Attempt: $retryTimes');
+
+    if (isIceRestart) {
+      _onIceRestartRequestFailed('request timeout');
+      return;
+    }
 
     if (isRenegotiating && _isIceConnectionRetrying) {
       if (_isIceRestartRetryWindowActive) {
@@ -1462,8 +1480,16 @@ class RTCSession extends EventManager implements Owner {
     }
   }
 
-  void onDialogError([bool isRenegotiating = false]) {
+  void onDialogError([
+    bool isRenegotiating = false,
+    bool isIceRestart = false,
+  ]) {
     logger.e('onDialogError()');
+
+    if (isIceRestart) {
+      _onIceRestartRequestFailed('dialog error');
+      return;
+    }
 
     // If the session is trying to ICE restart, do not end the call
     if (isRenegotiating && _isIceConnectionRetrying) return;
@@ -1476,6 +1502,36 @@ class RTCSession extends EventManager implements Owner {
       });
     }
   }
+
+  /// An ICE restart re-INVITE failed without an answer (URSA-10410). It was
+  /// sent because the network dropped, so its failure never ends the call:
+  /// ICE may already have recovered on its own, which also clears the retry
+  /// flag before the SIP transport reports the failure. If the media is still
+  /// down the restart is tried again once the transport is back.
+  void _onIceRestartRequestFailed(String reason) {
+    final RTCIceConnectionState? state = _connection?.iceConnectionState;
+    if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+        state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+      logger.w('ICE restart re-INVITE failed ($reason); media is up, '
+          'keeping the session');
+      return;
+    }
+
+    logger.w('ICE restart re-INVITE failed ($reason); keeping the session '
+        'and retrying');
+    if (_isIceRestartRetryWindowActive) {
+      _isIceConnectionRetrying = true;
+    } else {
+      _startIceRestartRetrying();
+    }
+    _scheduleIceRestart();
+  }
+
+  /// For tests only.
+  void debugSetStatus(int status) => _status = status;
+
+  /// For tests only.
+  bool get debugIsIceRestartRetrying => _isIceConnectionRetrying;
 
   // Ice restart - renegotiation
   void iceRestart([int retryTimes = 0]) => _iceRestart(retryTimes: retryTimes);
@@ -2869,6 +2925,7 @@ class RTCSession extends EventManager implements Owner {
     Map<String, dynamic>? options,
     int retryTimes = 0,
     bool isRenegotiating = false,
+    bool isIceRestart = false,
   ]) async {
     logger.d('sendReinvite()');
 
@@ -2955,16 +3012,17 @@ class RTCSession extends EventManager implements Owner {
         onFailed(event.response);
       });
       handlers.on(EventOnTransportError(), (EventOnTransportError event) {
-        onTransportError(isRenegotiating); // Do nothing because session ends.
+        onTransportError(isRenegotiating, isIceRestart);
       });
       handlers.on(EventOnRequestTimeout(), (EventOnRequestTimeout event) {
         onRequestTimeout(
           retryTimes: retryTimes,
           isRenegotiating: isRenegotiating,
-        ); // Do nothing because session ends.
+          isIceRestart: isIceRestart,
+        );
       });
       handlers.on(EventOnDialogError(), (EventOnDialogError event) {
-        onDialogError(isRenegotiating); // Do nothing because session ends.
+        onDialogError(isRenegotiating, isIceRestart);
       });
 
       sendRequest(SipMethod.INVITE, <String, dynamic>{
